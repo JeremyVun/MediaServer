@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Media">
+  <!-- Full-bleed background so the icon works as a maskable PWA icon; the
+       amber play glyph sits well within the ~80% safe zone. Brand tokens:
+       canvas #0c0d10, surface #15171c, accent amber #e8a33d. -->
+  <rect width="512" height="512" fill="#0c0d10"/>
+  <rect x="96" y="96" width="320" height="320" rx="80" fill="#15171c"/>
+  <path d="M214 178 L214 334 L342 256 Z" fill="#e8a33d"/>
+</svg>

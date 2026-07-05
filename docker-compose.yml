@@ -1,0 +1,20 @@
+services:
+  media-server:
+    build:
+      context: .
+    image: media-server:latest
+    container_name: media-server
+    restart: unless-stopped
+    # Bound to loopback only: nothing on the LAN/internet can reach it
+    # directly — put Caddy (or Tailscale) in front for remote access.
+    ports:
+      - "127.0.0.1:8484:8484"
+    volumes:
+      - media-data:/data
+      # Your media library (read-write: uploads and trash live in the library).
+      - /Volumes/Media:/media
+      # Optional: your own config instead of the baked-in default.
+      # - ./deploy/docker/config.yml:/etc/media-server/config.yml:ro
+
+volumes:
+  media-data:

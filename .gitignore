@@ -1,0 +1,15 @@
+node_modules/
+.DS_Store
+bin/
+obj/
+dist/
+test-results/
+playwright-report/
+
+# Local data (never commit a library database or logs)
+*.db
+*.db-shm
+*.db-wal
+data/
+deploy/
+docs/

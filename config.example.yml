@@ -1,0 +1,41 @@
+# media-server configuration.
+# Copy to ~/media-server/config.yml (the default path) or pass --config.
+# Every key is optional; the values below are the defaults unless noted.
+
+server:
+  bind: "0.0.0.0"
+  port: 8484
+
+data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, logs
+
+hls_cache:
+  dir: "~/media-server/data/hls"       # move to a library volume if SSD is tight
+  max_gb: 20
+
+# Library roots: directories whose contents form the one flat library.
+# Paths may point at not-yet-mounted volumes — those roots start offline.
+# Roots listed here are seeded into the database at boot; after that the
+# database is the source of truth (add/remove at runtime via the API).
+library_roots:
+  - name: "Media"
+    path: "/Volumes/Media"
+
+transcode:
+  max_concurrent: 2
+  ffmpeg: ""                           # empty = find on $PATH
+  ffprobe: ""
+
+upload:
+  min_free_gb: 5
+
+trash:
+  retention_days: 7
+
+log:
+  level: "info"                        # debug | info | warn | error
+
+# Operator debugging. pprof_port, when set, serves net/http/pprof on
+# 127.0.0.1:<port> only (never the LAN bind) for heap/goroutine snapshots
+# during the soak test. Leave 0/unset to disable.
+debug:
+  pprof_port: 0

@@ -1,0 +1,1 @@
+ALTER TABLE library_roots ADD COLUMN attached INTEGER NOT NULL DEFAULT 1;

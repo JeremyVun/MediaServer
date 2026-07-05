@@ -1,0 +1,340 @@
+@import 'tailwindcss';
+
+/* ------------------------------------------------------------------------
+   Design tokens — the single source of truth (docs/DESIGN-SYSTEM.md).
+   Components must use semantic tokens, never raw hex and never
+   primitive-scale values. Utilities below are mapped via @theme inline.
+   ------------------------------------------------------------------------ */
+
+/* Color — dark (default) */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* Backgrounds — elevation = lightness */
+  --color-bg-canvas: #0c0d10; /* app background */
+  --color-bg-surface: #15171c; /* cards, trays, nav */
+  --color-bg-raised: #1d2026; /* dialogs, menus, hover-raised cards */
+  --color-bg-inset: #08090b; /* wells: inputs, player scrub track */
+  --color-bg-overlay: rgb(12 13 16 / 0.72); /* scrims; pair with backdrop-blur(20px) */
+
+  /* Text */
+  --color-text-primary: #f2f3f5;
+  --color-text-secondary: #a9aeb8; /* metadata, labels — AA on all bg tokens */
+  --color-text-tertiary: #6e7482; /* timestamps, hints; never for essential info */
+  --color-text-disabled: #4a4f5a;
+  --color-text-on-accent: #201403; /* on amber fills */
+
+  /* Borders & lines */
+  --color-border: #262a32; /* hairlines, dividers */
+  --color-border-strong: #363b45; /* input borders, focused card outline */
+
+  /* Accent — marquee amber */
+  --color-accent: #e8a33d;
+  --color-accent-hover: #f2b355;
+  --color-accent-pressed: #d18f2b;
+  --color-accent-subtle: rgb(232 163 61 / 0.14); /* tinted fills: active chips, selected rows */
+
+  /* Amber fills (buttons) keep the dark-theme amber in BOTH themes;
+     only amber-as-text/border swaps to the darkened light-mode value. */
+  --color-accent-fill: #e8a33d;
+  --color-accent-fill-hover: #f2b355;
+  --color-accent-fill-pressed: #d18f2b;
+
+  /* Status */
+  --color-success: #55b467;
+  --color-danger: #e5484d;
+  --color-danger-hover: #ec5d62;
+  --color-info: #5b7fde;
+
+  /* Component-level */
+  --color-progress-track: rgb(255 255 255 / 0.18);
+  --color-skeleton: #1b1e24;
+  --color-skeleton-sheen: #262a32;
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px rgb(0 0 0 / 0.35);
+  --shadow-overlay: 0 4px 12px rgb(0 0 0 / 0.6), 0 24px 60px rgb(0 0 0 / 0.5);
+}
+
+/* Color — light */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --color-bg-canvas: #f7f6f3; /* warm paper, not clinical white */
+  --color-bg-surface: #ffffff;
+  --color-bg-raised: #ffffff; /* differentiated by shadow, not lightness */
+  --color-bg-inset: #edece8;
+  --color-bg-overlay: rgb(28 26 21 / 0.45);
+
+  --color-text-primary: #1b1d22;
+  --color-text-secondary: #585e69;
+  --color-text-tertiary: #878d99;
+  --color-text-disabled: #b6bac3;
+  --color-text-on-accent: #201403;
+
+  --color-border: #e5e3dd;
+  --color-border-strong: #c9c7c0;
+
+  --color-accent: #c77e14; /* darkened amber: AA as text on white */
+  --color-accent-hover: #b06f0f;
+  --color-accent-pressed: #96600d;
+  --color-accent-subtle: rgb(199 126 20 / 0.12);
+
+  --color-success: #2e7d3c;
+  --color-danger: #ce2c31;
+  --color-danger-hover: #b52125;
+  --color-info: #3a5ccc;
+
+  --color-progress-track: rgb(0 0 0 / 0.12);
+  --color-skeleton: #eceae5;
+  --color-skeleton-sheen: #f5f3ef;
+  --shadow-raised: 0 1px 2px rgb(27 29 34 / 0.08), 0 6px 20px rgb(27 29 34 / 0.08);
+  --shadow-overlay: 0 4px 12px rgb(27 29 34 / 0.14), 0 24px 60px rgb(27 29 34 / 0.18);
+}
+
+/* Typography, spacing, radius, motion, focus, z-index — theme-independent */
+:root {
+  --font-stack-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-stack-mono: ui-monospace, 'SF Mono', Menlo, monospace; /* file paths, codecs, sizes */
+
+  /* Spacing: 4px scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --radius-sm: 6px; /* chips, badges, inputs */
+  --radius-md: 10px; /* buttons, menu items */
+  --radius-lg: 14px; /* cards, dialogs, trays */
+  --radius-full: 9999px; /* progress bars, avatars, scrubber thumb */
+
+  --duration-fast: 120ms; /* hover, press, toggles */
+  --duration-base: 200ms; /* menus, tooltips, card enter */
+  --duration-slow: 320ms; /* dialogs, trays, route transitions */
+  --easing-out: cubic-bezier(0.2, 0, 0, 1); /* default — everything entering/changing */
+  --easing-in: cubic-bezier(0.4, 0, 1, 1); /* exits only */
+  --easing-spring: cubic-bezier(0.34, 1.3, 0.64, 1); /* playful pops: new-item badge, undo toast */
+
+  --focus-ring: 0 0 0 2px var(--color-bg-canvas), 0 0 0 4px var(--color-accent);
+  /* :focus-visible only — never on mouse focus */
+
+  --z-nav: 100;
+  --z-tray: 200;
+  --z-dialog: 300;
+  --z-toast: 400;
+}
+
+/* ------------------------------------------------------------------------
+   Tailwind mapping: utilities like bg-surface, text-secondary, rounded-lg,
+   border-line, shadow-raised resolve to the tokens above.
+   ------------------------------------------------------------------------ */
+@theme inline {
+  --font-sans: var(--font-stack-sans);
+  --font-mono: var(--font-stack-mono);
+
+  /* Type scale (size / line-height) */
+  --text-xs: 0.75rem; /* 12 — badges, timestamps */
+  --text-xs--line-height: 1.35;
+  --text-sm: 0.8125rem; /* 13 — metadata, card subtitles */
+  --text-sm--line-height: 1.4;
+  --text-base: 0.9375rem; /* 15 — body, inputs, buttons */
+  --text-base--line-height: 1.5;
+  --text-md: 1.0625rem; /* 17 — card titles, list rows */
+  --text-md--line-height: 1.45;
+  --text-lg: 1.25rem; /* 20 — section headings */
+  --text-lg--line-height: 1.35;
+  --text-xl: 1.625rem; /* 26 — screen titles */
+  --text-xl--line-height: 1.25;
+  --text-2xl: 2.125rem; /* 34 — item-detail hero title */
+  --text-2xl--line-height: 1.15;
+
+  --tracking-tight: -0.015em; /* lg and up */
+
+  /* Backgrounds */
+  --color-canvas: var(--color-bg-canvas);
+  --color-surface: var(--color-bg-surface);
+  --color-raised: var(--color-bg-raised);
+  --color-inset: var(--color-bg-inset);
+  --color-overlay: var(--color-bg-overlay);
+
+  /* Text */
+  --color-primary: var(--color-text-primary);
+  --color-secondary: var(--color-text-secondary);
+  --color-tertiary: var(--color-text-tertiary);
+  --color-disabled: var(--color-text-disabled);
+  --color-on-accent: var(--color-text-on-accent);
+
+  /* Borders */
+  --color-line: var(--color-border);
+  --color-line-strong: var(--color-border-strong);
+
+  /* Accent & status (accent-fill-* stay amber in both themes) */
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-accent-pressed: var(--color-accent-pressed);
+  --color-accent-subtle: var(--color-accent-subtle);
+  --color-accent-fill: var(--color-accent-fill);
+  --color-accent-fill-hover: var(--color-accent-fill-hover);
+  --color-accent-fill-pressed: var(--color-accent-fill-pressed);
+  --color-success: var(--color-success);
+  --color-danger: var(--color-danger);
+  --color-danger-hover: var(--color-danger-hover);
+  --color-info: var(--color-info);
+
+  /* Component-level */
+  --color-progress-track: var(--color-progress-track);
+  --color-skeleton: var(--color-skeleton);
+  --color-skeleton-sheen: var(--color-skeleton-sheen);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-overlay: var(--shadow-overlay);
+
+  /* Radius */
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-full: var(--radius-full);
+
+  /* Motion */
+  --ease-out: var(--easing-out);
+  --ease-in: var(--easing-in);
+  --ease-spring: var(--easing-spring);
+
+  /* Breakpoints (min-width) */
+  --breakpoint-sm: 480px; /* phone landscape */
+  --breakpoint-md: 768px; /* iPad portrait */
+  --breakpoint-lg: 1024px; /* iPad landscape / laptop */
+  --breakpoint-xl: 1440px;
+}
+
+/* ------------------------------------------------------------------------
+   Base styles
+   ------------------------------------------------------------------------ */
+@layer base {
+  html {
+    font-family: var(--font-stack-sans);
+  }
+
+  body {
+    background: var(--color-bg-canvas);
+    color: var(--color-text-primary);
+    font-size: 0.9375rem;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Focus is a ring, :focus-visible only — never on mouse focus. */
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+
+  /* All timers/counters use tabular numerals. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Subtle horizontal scrollbar for media strips — thin, low-contrast, over a
+     transparent track so it reads as an affordance, not chrome. Themed via
+     tokens, so it works in both light and dark. */
+  /* Fully hidden scrollbar for carousel strips that provide their own
+     affordance (arrow buttons / swipe). */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .scrollbar-subtle {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+  .scrollbar-subtle::-webkit-scrollbar {
+    height: 8px;
+  }
+  .scrollbar-subtle::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-subtle::-webkit-scrollbar-thumb {
+    background: var(--color-border-strong);
+    border-radius: var(--radius-full);
+  }
+  .scrollbar-subtle::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-tertiary);
+  }
+}
+
+/* Dialog enter: scale 0.97→1 + fade at --duration-slow. */
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Menu enter: quick fade + scale from the trigger edge. */
+@keyframes menu-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Toast enter: a playful spring pop from below. */
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Card enter: new library items arriving over SSE. */
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Skeleton sheen: 1.6 s linear gradient sweep. */
+@keyframes skeleton-sheen {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Motion is physics, not decoration — and fully disabled on request. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
