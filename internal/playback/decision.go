@@ -125,8 +125,14 @@ func IsImageSubtitle(codec string) bool {
 	}
 }
 
+// profileVersion invalidates cached HLS output when the ffmpeg pipeline's
+// on-disk format changes. Version 3 replaces mid-GOP copy-tier cuts with
+// independently decodable, source-keyframe-aligned segments.
+const profileVersion = 3
+
 func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleStreamIndex *int) string {
 	profile := struct {
+		Version             int          `json:"version"`
 		FileID              int64        `json:"file_id"`
 		Fingerprint         string       `json:"fingerprint,omitempty"`
 		Container           string       `json:"container"`
@@ -138,6 +144,7 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 		Reason              string       `json:"reason,omitempty"`
 		SubtitleStreamIndex *int         `json:"subtitle_stream_index,omitempty"`
 	}{
+		Version:             profileVersion,
 		FileID:              file.ID,
 		Fingerprint:         file.Fingerprint,
 		Container:           normalizeContainer(file.Container),

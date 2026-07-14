@@ -16,13 +16,11 @@
     <script>
       // Apply the theme before first paint — no flash of wrong theme.
       ;(function () {
+        // Any stored value is trusted — custom themes are arbitrary names. An
+        // unknown name falls through to the :root (dark) defaults, and
+        // ThemeProvider re-validates against the theme registry on mount.
         var stored = localStorage.getItem('theme')
-        var theme =
-          stored === 'dark' || stored === 'light'
-            ? stored
-            : matchMedia('(prefers-color-scheme: light)').matches
-              ? 'light'
-              : 'dark'
+        var theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
         document.documentElement.dataset.theme = theme
       })()
     </script>

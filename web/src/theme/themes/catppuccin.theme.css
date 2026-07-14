@@ -1,0 +1,41 @@
+/* @theme
+   label: Catppuccin Mocha
+   base: dark
+*/
+/* Catppuccin Mocha — the soft pastel dark palette (catppuccin.com). Mauve
+   accent on a muted blue-charcoal base; pastel Aurora-style status colours. */
+:root[data-theme='catppuccin'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #1e1e2e; /* base */
+  --color-bg-surface: #313244; /* surface0 */
+  --color-bg-raised: #45475a; /* surface1 */
+  --color-bg-inset: #181825; /* mantle */
+  --color-bg-overlay: rgb(17 17 27 / 0.72); /* crust */
+
+  --color-text-primary: #cdd6f4; /* text */
+  --color-text-secondary: #bac2de; /* subtext1 — AA on surface1 raised */
+  --color-text-tertiary: #9399b2; /* overlay2 */
+  --color-text-disabled: #6c7086; /* overlay0 */
+  --color-text-on-accent: #1e1e2e; /* base on the light mauve fill */
+
+  --color-border: #45475a; /* surface1 */
+  --color-border-strong: #585b70; /* surface2 */
+
+  --color-accent: #cba6f7; /* mauve */
+  --color-accent-hover: #d6b8f9;
+  --color-accent-pressed: #b48ee8;
+  --color-accent-subtle: rgb(203 166 247 / 0.18);
+
+  --color-accent-fill: #cba6f7;
+  --color-accent-fill-hover: #d6b8f9;
+  --color-accent-fill-pressed: #b48ee8;
+
+  --color-success: #a6e3a1; /* green */
+  --color-danger: #f38ba8; /* red */
+  --color-danger-hover: #f6a0b8;
+  --color-info: #89b4fa; /* blue */
+
+  --color-skeleton: #313244;
+  --color-skeleton-sheen: #45475a;
+}

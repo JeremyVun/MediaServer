@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState, type DragEvent, type PointerEvent } from 'react'
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router'
+import { Link, useLocation, useSearchParams } from 'react-router'
 import {
   Check,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Clapperboard,
   HardDrive,
-  Info,
   Layers,
-  MoreHorizontal,
-  Play,
+  ListChecks,
   Plus,
   Search,
   Settings,
@@ -26,13 +22,13 @@ import {
   useDeleteItem,
   useHealth,
   useLibraryItems,
-  useRemoveItemFromCollection,
   useRestoreItem,
   type LibraryFilters,
 } from '../../api/queries.ts'
 import { useLiveItems } from '../../api/sse.tsx'
 import { useUploads } from '../upload/UploadProvider.tsx'
 import type { Collection, ItemSummary } from '../../api/types.ts'
+import { useCardStyle, type CardStyle } from '../../theme/cardStyle.ts'
 import { formatDuration, isRecentlyCreated, progressPercent } from '../../lib/format.ts'
 import { makeRunOrToast } from '../../lib/mutationFeedback.ts'
 import { libraryParamUpdates, parseLibraryParams, withParamUpdates } from '../../lib/searchParams.ts'
@@ -44,7 +40,6 @@ import {
   Input,
   Menu,
   MenuItem,
-  MenuSeparator,
   Skeleton,
   useToast,
 } from '../../ui/index.ts'
@@ -142,12 +137,12 @@ export function LibraryPage() {
   const library = useLibraryItems(filters)
   const collections = useCollections()
   const addToCollection = useAddItemToCollection()
-  const removeFromCollection = useRemoveItemFromCollection()
   const createCollection = useCreateCollection()
   const deleteItem = useDeleteItem()
   const restoreItem = useRestoreItem()
   const liveItems = useLiveItems()
   const uploads = useUploads()
+  const cardStyle = useCardStyle()
   const { toast } = useToast()
   const items = library.data?.pages.flatMap((page) => page.items) ?? []
   const total = library.data?.pages[0]?.total ?? 0
@@ -165,7 +160,6 @@ export function LibraryPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const dragDepth = useRef(0)
   const [draggingFiles, setDraggingFiles] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<ItemSummary | null>(null)
 
   // 4.1: selection mode. null = off; a Set (possibly empty) = active.
   // Per-visit state by design — never in the URL; exiting clears it.
@@ -175,6 +169,12 @@ export function LibraryPage() {
   const [batchFilter, setBatchFilter] = useState('')
   const selectionActive = selection != null
 
+  // Entered from the toolbar (no item yet) or by long-pressing a card (that
+  // item pre-selected). Delete / add-to-collection then run from the action bar.
+  const startSelection = () => {
+    selectionAnchor.current = null
+    setSelection(new Set())
+  }
   const enterSelection = (id: number) => {
     selectionAnchor.current = id
     setSelection(new Set([id]))
@@ -324,38 +324,6 @@ export function LibraryPage() {
   }
 
   const runOrToast = makeRunOrToast(toast)
-
-  const onToggleCollection = (item: ItemSummary, collection: Collection, isMember: boolean) =>
-    runOrToast(
-      () =>
-        isMember
-          ? removeFromCollection.mutateAsync({ collectionID: collection.id, itemID: item.id })
-          : addToCollection.mutateAsync({ collectionID: collection.id, itemID: item.id }),
-      "Couldn't update collection",
-    )
-
-  const onCreateCollectionAndAdd = (item: ItemSummary, name: string) =>
-    runOrToast(async () => {
-      const collection = await createCollection.mutateAsync(name)
-      await addToCollection.mutateAsync({ collectionID: collection.id, itemID: item.id })
-    }, "Couldn't create collection")
-
-  const onDelete = async () => {
-    if (!deleteTarget) return
-    const item = deleteTarget
-    const ok = await runOrToast(() => deleteItem.mutateAsync(item.id), "Couldn't move to trash")
-    if (!ok) return
-    setDeleteTarget(null)
-    toast({
-      message: `${item.title} moved to trash`,
-      action: {
-        label: 'Undo',
-        onClick: () => {
-          void runOrToast(() => restoreItem.mutateAsync(item.id), "Couldn't restore item")
-        },
-      },
-    })
-  }
 
   // Batch actions act on the intersection of the selection and the currently
   // loaded items — ids that vanished (or arrived via SSE untracked) are
@@ -559,7 +527,9 @@ export function LibraryPage() {
 
       {library.isError && <EmptyMessage text="Can't load the library" />}
 
-      {continueWatching.length > 0 && <ContinueWatchingRow items={continueWatching} />}
+      {continueWatching.length > 0 && (
+        <ContinueWatchingRow items={continueWatching} cardStyle={cardStyle} />
+      )}
 
       {!library.isPending && !library.isError && items.length === 0 && (
         <EmptyMessage
@@ -577,20 +547,29 @@ export function LibraryPage() {
         <>
           <div className="mb-4 flex items-center justify-between text-sm text-secondary">
             <span>{total} items</span>
-            {urlState.q && <span>Search results for "{urlState.q}"</span>}
+            <div className="flex items-center gap-4">
+              {urlState.q && <span>Search results for "{urlState.q}"</span>}
+              {!selectionActive && (
+                <button
+                  type="button"
+                  onClick={startSelection}
+                  className="text-secondary hover:text-primary -my-1 inline-flex items-center gap-1.5 py-1"
+                >
+                  <ListChecks aria-hidden className="size-4" strokeWidth={1.75} />
+                  Select
+                </button>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
             {items.map((item) => (
               <PosterCard
                 key={item.id}
                 item={item}
+                cardStyle={cardStyle}
                 isNew={isRecentlyCreated(item.created_at)}
                 justArrived={liveItems.hasJustArrived(item.id)}
                 libraryPath={libraryPath}
-                collections={collections.data ?? []}
-                onToggleCollection={onToggleCollection}
-                onCreateCollectionAndAdd={onCreateCollectionAndAdd}
-                onRequestDelete={setDeleteTarget}
                 selectionMode={selectionActive}
                 selected={selection?.has(item.id) ?? false}
                 onEnterSelection={enterSelection}
@@ -609,25 +588,6 @@ export function LibraryPage() {
         </>
       )}
 
-      <Dialog
-        open={deleteTarget != null}
-        onClose={() => setDeleteTarget(null)}
-        title="Move to trash?"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
-              Cancel
-            </Button>
-            <Button variant="danger" pending={deleteItem.isPending} onClick={() => void onDelete()}>
-              <Trash2 aria-hidden className="size-4" strokeWidth={1.75} />
-              Move to trash
-            </Button>
-          </>
-        }
-      >
-        <p className="text-secondary">{deleteTarget?.title} will move to the root's trash folder.</p>
-      </Dialog>
-
       {/* 4.1: selection action bar — below toasts (--z-toast) so feedback
           stays visible above it. */}
       {selection && (
@@ -638,6 +598,7 @@ export function LibraryPage() {
             </span>
             <Menu
               aria-label="Add selected items to collection"
+              disabled={selection.size === 0}
               trigger={
                 <>
                   <Plus aria-hidden className="size-4" strokeWidth={1.75} />
@@ -703,7 +664,7 @@ function countLabel(count: number): string {
 // Phase 5: horizontal "Continue watching" strip. Its own <section> container so
 // its cards' keys never collide with the grid's PosterCards below (same item
 // ids appear in both). Compact cards link straight to /watch to resume.
-function ContinueWatchingRow({ items }: { items: ItemSummary[] }) {
+function ContinueWatchingRow({ items, cardStyle }: { items: ItemSummary[]; cardStyle: CardStyle }) {
   const trackRef = useRef<HTMLDivElement>(null)
   // Mouse drag-to-swipe. Touch devices get native swipe + CSS snap from
   // overflow scroll; this adds the same gesture for desktop pointers. CSS
@@ -857,14 +818,14 @@ function ContinueWatchingRow({ items }: { items: ItemSummary[] }) {
         className="scrollbar-none flex cursor-grab snap-x snap-mandatory gap-4 overflow-x-auto pb-2 select-none active:cursor-grabbing"
       >
         {items.map((item) => (
-          <ContinueCard key={item.id} item={item} />
+          <ContinueCard key={item.id} item={item} cardStyle={cardStyle} />
         ))}
       </div>
     </section>
   )
 }
 
-function ContinueCard({ item }: { item: ItemSummary }) {
+function ContinueCard({ item, cardStyle }: { item: ItemSummary; cardStyle: CardStyle }) {
   const [brokenThumb, setBrokenThumb] = useState(false)
   // thumb_url is versioned (?v= appears when the thumbnail lands, changes when
   // it regenerates) — a new URL means the failure no longer applies, so
@@ -875,67 +836,56 @@ function ContinueCard({ item }: { item: ItemSummary }) {
     setBrokenThumb(false)
   }
   const progress = progressPercent(item.progress?.position_s, item.duration_s)
+  // Match the library grid card exactly: Minimal overlays the title on the
+  // thumbnail, Compact shows a title + metadata strip below. Reuses the same
+  // PosterThumb/PosterMeta + Card chrome as PosterCard so the two rows stay
+  // consistent whichever card style is chosen. The whole card resumes playback.
+  const showMeta = cardStyle !== 'minimal'
+  const overlayTitle = cardStyle === 'minimal' ? item.title : undefined
+  const meta = [item.year, formatDuration(item.duration_s)].filter(Boolean).join(' · ')
   return (
     <Link
       to={`/watch/${item.id}`}
       state={{ from: '/' }}
       aria-label={`Resume ${item.title}`}
-      className="w-56 shrink-0 snap-start rounded-md sm:w-64"
+      className="w-56 shrink-0 snap-start sm:w-64"
     >
-      <div className="bg-inset relative aspect-video overflow-hidden rounded-md">
-        {!brokenThumb ? (
-          <img
-            src={item.thumb_url}
-            alt=""
-            loading="lazy"
-            onError={() => setBrokenThumb(true)}
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <div className="text-tertiary flex h-full w-full items-center justify-center">
-            <Clapperboard aria-hidden className="size-8" strokeWidth={1.5} />
-          </div>
-        )}
-        {progress > 0 && (
-          <span className="bg-progress-track absolute inset-x-0 bottom-0 h-[3px]">
-            <span className="bg-accent-fill block h-full rounded-full" style={{ width: `${progress}%` }} />
-          </span>
-        )}
-      </div>
-      <h3 className="mt-2 truncate text-sm font-medium">{item.title}</h3>
+      <Card interactive>
+        <PosterThumb
+          item={item}
+          isNew={false}
+          progress={progress}
+          overlayTitle={overlayTitle}
+          brokenThumb={brokenThumb}
+          onError={() => setBrokenThumb(true)}
+        />
+        {showMeta && <PosterMeta title={item.title} meta={meta} />}
+      </Card>
     </Link>
   )
 }
 
 function PosterCard({
   item,
+  cardStyle,
   isNew,
   justArrived,
   libraryPath,
-  collections,
-  onToggleCollection,
-  onCreateCollectionAndAdd,
-  onRequestDelete,
   selectionMode,
   selected,
   onEnterSelection,
   onToggleSelect,
 }: {
   item: ItemSummary
+  cardStyle: CardStyle
   isNew: boolean
   justArrived: boolean
   libraryPath: string
-  collections: Collection[]
-  onToggleCollection: (item: ItemSummary, collection: Collection, isMember: boolean) => void
-  onCreateCollectionAndAdd: (item: ItemSummary, name: string) => void
-  onRequestDelete: (item: ItemSummary) => void
   selectionMode: boolean
   selected: boolean
   onEnterSelection: (id: number) => void
   onToggleSelect: (id: number, shiftRange: boolean) => void
 }) {
-  const navigate = useNavigate()
-  const [collectionFilter, setCollectionFilter] = useState('')
   const [brokenThumb, setBrokenThumb] = useState(false)
   // Same pattern as ContinueCard: a changed (versioned) thumb_url invalidates
   // a previous load failure — retry instead of showing the placeholder forever.
@@ -948,6 +898,10 @@ function PosterCard({
     ? 100
     : progressPercent(item.progress?.position_s, item.duration_s)
   const meta = [item.year, formatDuration(item.duration_s)].filter(Boolean).join(' · ')
+  // 'minimal' overlays the title on the poster; 'compact' keeps a title +
+  // metadata strip below it.
+  const showMeta = cardStyle !== 'minimal'
+  const overlayTitle = cardStyle === 'minimal' ? item.title : undefined
 
   // 4.1: long-press (touch) enters selection mode. The press is cancelled by
   // lift/movement; when it fires, the release click is swallowed so it
@@ -1010,20 +964,23 @@ function PosterCard({
     >
       {item.available ? (
         <>
-          {/* 3.1: the poster plays instantly; the metadata strip below opens
-              details. Details also stays reachable via the ⋯ menu. */}
+          {/* 3.1: the poster plays instantly; in Compact the title strip below
+              opens details. Delete / add-to-collection live in selection mode. */}
           <Link to={`/watch/${item.id}`} state={{ from: libraryPath }} aria-label={`Play ${item.title}`} className="block">
             <PosterThumb
               item={item}
               isNew={isNew}
               progress={progress}
+              overlayTitle={overlayTitle}
               brokenThumb={brokenThumb}
               onError={() => setBrokenThumb(true)}
             />
           </Link>
-          <Link to={`/items/${item.id}`} state={{ from: libraryPath }} className="block">
-            <PosterMeta title={item.title} meta={meta} />
-          </Link>
+          {showMeta && (
+            <Link to={`/items/${item.id}`} state={{ from: libraryPath }} className="block">
+              <PosterMeta title={item.title} meta={meta} />
+            </Link>
+          )}
         </>
       ) : (
         <Link to={`/items/${item.id}`} state={{ from: libraryPath }} className="block">
@@ -1031,87 +988,33 @@ function PosterCard({
             item={item}
             isNew={isNew}
             progress={progress}
+            overlayTitle={overlayTitle}
             brokenThumb={brokenThumb}
             onError={() => setBrokenThumb(true)}
           />
-          <PosterMeta title={item.title} meta={meta} />
+          {showMeta && <PosterMeta title={item.title} meta={meta} />}
         </Link>
       )}
-      {/* 4.1: hover-revealed on desktop (enters selection mode); always
-          visible while selecting. In selection mode the card's capture
-          handler owns clicks, so this is the visual state only. */}
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={selected}
-        aria-label={`Select ${item.title}`}
-        onClick={() => {
-          if (!selectionMode) onEnterSelection(item.id)
-        }}
-        className={[
-          'absolute top-2 left-2 z-10 flex size-6 cursor-pointer items-center justify-center rounded-sm border transition-opacity duration-[var(--duration-fast)]',
-          selected
-            ? 'bg-accent-fill text-on-accent border-transparent'
-            : 'bg-raised/90 text-primary border-line shadow-raised',
-          selectionMode ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-        ].join(' ')}
-      >
-        {selected && <Check aria-hidden className="size-4" strokeWidth={2} />}
-      </button>
-      {!selectionMode && (
-      <Menu
-        aria-label="Open item menu"
-        triggerClassName="bg-raised/90 text-primary border-line absolute top-2 right-2 flex size-9 cursor-pointer items-center justify-center rounded-sm border shadow-raised"
-        trigger={<MoreHorizontal aria-hidden className="size-5" strokeWidth={1.75} />}
-        onOpenChange={(open) => {
-          if (!open) setCollectionFilter('')
-        }}
-      >
-        {({ view, setView }) =>
-          view === 'collections' ? (
-            <CollectionPicker
-              item={item}
-              collections={collections}
-              filter={collectionFilter}
-              setFilter={setCollectionFilter}
-              onBack={() => setView(null)}
-              onToggleCollection={onToggleCollection}
-              onCreateCollectionAndAdd={onCreateCollectionAndAdd}
-            />
-          ) : (
-            <>
-              <MenuItem
-                icon={<Play className="size-4" strokeWidth={1.75} />}
-                disabled={!item.available}
-                onSelect={() => navigate(`/watch/${item.id}`, { state: { from: libraryPath } })}
-              >
-                Play
-              </MenuItem>
-              <MenuItem
-                icon={<Info className="size-4" strokeWidth={1.75} />}
-                onSelect={() => navigate(`/items/${item.id}`, { state: { from: libraryPath } })}
-              >
-                Details
-              </MenuItem>
-              <MenuItem
-                trailing={<ChevronRight className="size-4" strokeWidth={1.75} />}
-                closeOnSelect={false}
-                onSelect={() => setView('collections')}
-              >
-                Add to collection…
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem
-                danger
-                icon={<Trash2 className="size-4" strokeWidth={1.75} />}
-                onSelect={() => onRequestDelete(item)}
-              >
-                Move to trash
-              </MenuItem>
-            </>
-          )
-        }
-      </Menu>
+      {/* 4.1: cards carry no chrome while browsing. In selection mode each card
+          shows a checkbox; the card's capture handler owns the actual toggle
+          (so a click anywhere on the card counts), but keeping this a focusable
+          role=checkbox means keyboard + screen-reader selection still work —
+          Space/Enter here dispatches a click the card intercepts. */}
+      {selectionMode && (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={selected}
+          aria-label={`Select ${item.title}`}
+          className={[
+            'absolute top-2 left-2 z-10 flex size-6 items-center justify-center rounded-full border',
+            selected
+              ? 'bg-accent-fill text-on-accent border-transparent'
+              : 'bg-overlay border-white/70 backdrop-blur-sm',
+          ].join(' ')}
+        >
+          {selected && <Check aria-hidden className="size-4" strokeWidth={2.5} />}
+        </button>
       )}
     </Card>
   )
@@ -1121,12 +1024,15 @@ function PosterThumb({
   item,
   isNew,
   progress,
+  overlayTitle,
   brokenThumb,
   onError,
 }: {
   item: ItemSummary
   isNew: boolean
   progress: number
+  /** Minimal style: title rendered over a scrim at the poster's bottom edge. */
+  overlayTitle?: string
   brokenThumb: boolean
   onError: () => void
 }) {
@@ -1154,7 +1060,7 @@ function PosterThumb({
         </div>
       )}
       {!item.available && (
-        <span className="bg-raised text-secondary border-line absolute top-2 right-12 inline-flex size-8 items-center justify-center rounded-sm border">
+        <span className="bg-raised text-secondary border-line absolute top-2 right-2 inline-flex size-8 items-center justify-center rounded-sm border">
           <HardDrive aria-hidden className="size-4" strokeWidth={1.75} />
         </span>
       )}
@@ -1162,6 +1068,11 @@ function PosterThumb({
         <span className="bg-accent-fill text-accent-contrast absolute top-2 left-2 rounded-sm px-2 py-1 text-xs font-semibold">
           New
         </span>
+      )}
+      {overlayTitle && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent px-2.5 pt-10 pb-2.5">
+          <h2 className="truncate text-sm font-medium text-white">{overlayTitle}</h2>
+        </div>
       )}
       {progress > 0 && (
         <span className="bg-progress-track absolute inset-x-0 bottom-0 h-[3px]">
@@ -1172,59 +1083,19 @@ function PosterThumb({
   )
 }
 
+// The library grid shows metadata only in Compact (Minimal overlays the title
+// on the poster instead): a tight 13px title with a smaller, closer meta line.
 function PosterMeta({ title, meta }: { title: string; meta: string }) {
   return (
-    <div className="p-3">
-      <h2 className="truncate text-md font-medium">{title}</h2>
-      <p className="truncate text-sm text-secondary">{meta}</p>
+    <div className="p-2">
+      <h2 className="truncate text-sm font-medium leading-snug">{title}</h2>
+      <p className="mt-0.5 truncate text-xs text-secondary">{meta}</p>
     </div>
   )
 }
 
-function CollectionPicker({
-  item,
-  collections,
-  filter,
-  setFilter,
-  onBack,
-  onToggleCollection,
-  onCreateCollectionAndAdd,
-}: {
-  item: ItemSummary
-  collections: Collection[]
-  filter: string
-  setFilter: (value: string) => void
-  onBack: () => void
-  onToggleCollection: (item: ItemSummary, collection: Collection, isMember: boolean) => void
-  onCreateCollectionAndAdd: (item: ItemSummary, name: string) => void
-}) {
-  return (
-    <div className="w-56">
-      <MenuItem
-        icon={<ChevronLeft className="size-4" strokeWidth={1.75} />}
-        closeOnSelect={false}
-        onSelect={onBack}
-      >
-        Back
-      </MenuItem>
-      <CollectionListPicker
-        collections={collections}
-        filter={filter}
-        setFilter={setFilter}
-        keepOpenOnPick
-        isChecked={(collection) => item.collection_ids.includes(collection.id)}
-        onPick={(collection) =>
-          onToggleCollection(item, collection, item.collection_ids.includes(collection.id))
-        }
-        onCreate={(name) => onCreateCollectionAndAdd(item, name)}
-      />
-    </div>
-  )
-}
-
-/** Filterable collection list with a create row — shared by the per-item
-    picker (checkmarks, stays open to toggle) and the batch action bar
-    (pick-once, closes). */
+/** Filterable collection list with a create row — used by the selection action
+    bar to add the selected items to a collection (pick-once, closes). */
 function CollectionListPicker({
   collections,
   filter,

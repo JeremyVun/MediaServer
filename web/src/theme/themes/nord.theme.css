@@ -1,0 +1,41 @@
+/* @theme
+   label: Nord
+   base: dark
+*/
+/* Nord — the arctic, north-bluish palette (nordtheme.com). Polar Night
+   backgrounds, Snow Storm text, Frost accent, Aurora status colours. */
+:root[data-theme='nord'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #2e3440; /* nord0 */
+  --color-bg-surface: #3b4252; /* nord1 */
+  --color-bg-raised: #434c5e; /* nord2 */
+  --color-bg-inset: #272c37;
+  --color-bg-overlay: rgb(46 52 64 / 0.75);
+
+  --color-text-primary: #eceff4; /* nord6 */
+  --color-text-secondary: #cdd4e0; /* Snow Storm — AA on nord2 raised */
+  --color-text-tertiary: #97a0b3;
+  --color-text-disabled: #667084;
+  --color-text-on-accent: #2e3440; /* nord0 on the frost fill */
+
+  --color-border: #4c566a; /* nord3 */
+  --color-border-strong: #5c6980;
+
+  --color-accent: #88c0d0; /* nord8 frost */
+  --color-accent-hover: #9fccd9;
+  --color-accent-pressed: #6fa8bb;
+  --color-accent-subtle: rgb(136 192 208 / 0.18);
+
+  --color-accent-fill: #88c0d0;
+  --color-accent-fill-hover: #9fccd9;
+  --color-accent-fill-pressed: #6fa8bb;
+
+  --color-success: #a3be8c; /* nord14 */
+  --color-danger: #bf616a; /* nord11 */
+  --color-danger-hover: #cd7079;
+  --color-info: #81a1c1; /* nord9 */
+
+  --color-skeleton: #3b4252;
+  --color-skeleton-sheen: #4c566a;
+}

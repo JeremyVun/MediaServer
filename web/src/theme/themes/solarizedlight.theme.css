@@ -1,0 +1,45 @@
+/* @theme
+   label: Solarized Light
+   base: light
+*/
+/* Solarized Light — Ethan Schoonover's warm sepia palette. Blue accent on a
+   cream base; the blue is darkened to #1c74b8 so white-on-fill and blue-as-text
+   both clear AA on the light ground. base: light, so every token is set. */
+:root[data-theme='solarizedlight'] {
+  color-scheme: light;
+
+  --color-bg-canvas: #fdf6e3; /* base3 */
+  --color-bg-surface: #fffdf5;
+  --color-bg-raised: #fffdf5;
+  --color-bg-inset: #eee8d5; /* base2 */
+  --color-bg-overlay: rgb(0 43 54 / 0.4); /* base03 tint */
+
+  --color-text-primary: #073642; /* base02 — dark, AA on cream */
+  --color-text-secondary: #586e75; /* base01 */
+  --color-text-tertiary: #657b83; /* base00 */
+  --color-text-disabled: #93a1a1; /* base1 */
+  --color-text-on-accent: #ffffff; /* white on the blue fill */
+
+  --color-border: #e6dfc8;
+  --color-border-strong: #c9be9c;
+
+  --color-accent: #1c74b8; /* darkened Solarized blue — AA as text on cream */
+  --color-accent-hover: #175e96;
+  --color-accent-pressed: #124d7c;
+  --color-accent-subtle: rgb(38 139 210 / 0.12);
+
+  --color-accent-fill: #1c74b8;
+  --color-accent-fill-hover: #268bd2;
+  --color-accent-fill-pressed: #175e96;
+
+  --color-success: #718400; /* darkened green */
+  --color-danger: #dc322f; /* red */
+  --color-danger-hover: #c62b28;
+  --color-info: #6c71c4; /* violet */
+
+  --color-progress-track: rgb(0 43 54 / 0.14);
+  --color-skeleton: #eee8d5;
+  --color-skeleton-sheen: #f7f2e3;
+  --shadow-raised: 0 1px 2px rgb(0 43 54 / 0.08), 0 6px 20px rgb(0 43 54 / 0.1);
+  --shadow-overlay: 0 4px 12px rgb(0 43 54 / 0.14), 0 24px 60px rgb(0 43 54 / 0.18);
+}

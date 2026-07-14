@@ -50,6 +50,8 @@ export interface MenuProps {
   align?: 'start' | 'end'
   /** Width/size overrides for the menu surface (default min-w-48). */
   menuClassName?: string
+  /** Disables the trigger — the menu can't be opened. */
+  disabled?: boolean
   onOpenChange?: (open: boolean) => void
   children: ReactNode | ((ctx: MenuContextValue) => ReactNode)
 }
@@ -60,6 +62,7 @@ export function Menu({
   'aria-label': ariaLabel,
   align = 'end',
   menuClassName,
+  disabled,
   onOpenChange,
   children,
 }: MenuProps) {
@@ -161,6 +164,7 @@ export function Menu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={ariaLabel}
+        disabled={disabled}
         className={triggerClassName ?? ''}
       >
         {trigger}

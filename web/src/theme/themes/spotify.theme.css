@@ -1,0 +1,42 @@
+/* @theme
+   label: Spotify
+   base: dark
+*/
+/* Spotify clone — near-black stage with the brand acid-green as accent + fill
+   (near-black text on the green, the way Spotify's primary buttons read). Dark
+   base: shadows and the progress track inherit. */
+:root[data-theme='spotify'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #121212;
+  --color-bg-surface: #1a1a1a;
+  --color-bg-raised: #282828;
+  --color-bg-inset: #0a0a0a;
+  --color-bg-overlay: rgb(0 0 0 / 0.72);
+
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #b3b3b3;
+  --color-text-tertiary: #7f7f7f;
+  --color-text-disabled: #535353;
+  --color-text-on-accent: #04140a; /* near-black on the green fill */
+
+  --color-border: #2a2a2a;
+  --color-border-strong: #404040;
+
+  --color-accent: #1db954;
+  --color-accent-hover: #1ed760;
+  --color-accent-pressed: #17a349;
+  --color-accent-subtle: rgb(29 185 84 / 0.16);
+
+  --color-accent-fill: #1db954;
+  --color-accent-fill-hover: #1ed760;
+  --color-accent-fill-pressed: #17a349;
+
+  --color-success: #1ed760;
+  --color-danger: #e91429;
+  --color-danger-hover: #f5384a;
+  --color-info: #509bf5;
+
+  --color-skeleton: #282828;
+  --color-skeleton-sheen: #404040;
+}

@@ -1,0 +1,59 @@
+/* @theme
+   label: Crisp
+   base: light
+*/
+/* Crisp — a bright, clean light theme: cool near-white canvas, pure-white
+   cards lifted by shadow (not lightness), near-black ink, and the app's
+   signature amber kept as the brand accent — darkened to #b5730f as
+   text/border for legibility on white, while the amber button fill inherits
+   unchanged from tokens.css.
+   base: light — a custom theme name never matches the built-in
+   [data-theme='light'] block, so every token is set here explicitly; only the
+   three shared amber accent-fill tokens are deliberately inherited (the design
+   intent is one amber fill in every theme, matching the built-in light). */
+:root[data-theme='crisp'] {
+  color-scheme: light;
+
+  /* Backgrounds — a cool ground so pure-white cards visibly pop (this is the
+     "crisp": edge-defined by a deeper cool canvas + sharper hairlines, which
+     also sets it apart from the built-in warm-paper Light). raised == surface;
+     depth comes from shadow + the canvas/card lightness gap. */
+  --color-bg-canvas: #eef2f7; /* cool near-white app background */
+  --color-bg-surface: #ffffff; /* cards, trays, nav — pop off the cool ground */
+  --color-bg-raised: #ffffff; /* dialogs, menus — differentiated by shadow */
+  --color-bg-inset: #e6eaf1; /* wells: inputs, scrub track — recede below canvas */
+  --color-bg-overlay: rgb(17 19 24 / 0.45); /* keep the alpha — scrims */
+
+  /* Text — near-black ink down to cool greys (nudged bluer to match the ground) */
+  --color-text-primary: #14161b;
+  --color-text-secondary: #535a6a; /* metadata, labels — AA on canvas, surface, raised */
+  --color-text-tertiary: #838b9b; /* timestamps, hints */
+  --color-text-disabled: #b4b9c3;
+  --color-text-on-accent: #201403; /* dark ink on the amber fill — AA */
+
+  /* Borders & lines — sharper than warm Light, for the edge-crisp read */
+  --color-border: #dbe0e8; /* hairlines, dividers */
+  --color-border-strong: #bec4d0; /* input borders, focused card outline */
+
+  /* Accent — amber, darkened for legibility as text/border on white */
+  --color-accent: #b5730f;
+  --color-accent-hover: #9c6108;
+  --color-accent-pressed: #855209;
+  --color-accent-subtle: rgb(181 115 15 / 0.12); /* keep the alpha — tinted fills */
+
+  /* Accent button fills (--color-accent-fill*) inherit the shared brand amber
+     from tokens.css, exactly as the built-in light theme does. */
+
+  /* Status — darkened variants that clear AA on white */
+  --color-success: #2e7d3c;
+  --color-danger: #ce2c31;
+  --color-danger-hover: #b52125;
+  --color-info: #3a5ccc;
+
+  /* Component-level */
+  --color-progress-track: rgb(17 19 24 / 0.12); /* keep the alpha */
+  --color-skeleton: #ececf1;
+  --color-skeleton-sheen: #f5f6f8;
+  --shadow-raised: 0 1px 2px rgb(17 19 24 / 0.06), 0 6px 20px rgb(17 19 24 / 0.08);
+  --shadow-overlay: 0 4px 12px rgb(17 19 24 / 0.12), 0 24px 60px rgb(17 19 24 / 0.16);
+}

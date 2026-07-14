@@ -1,0 +1,45 @@
+/* @theme
+   label: Catppuccin Latte
+   base: light
+*/
+/* Catppuccin Latte — the soft pastel LIGHT palette (catppuccin.com). Mauve
+   accent on a cool off-white. base: light, so every token is set explicitly
+   (a custom name never matches the built-in [data-theme='light'] block). */
+:root[data-theme='latte'] {
+  color-scheme: light;
+
+  --color-bg-canvas: #eff1f5; /* base */
+  --color-bg-surface: #ffffff;
+  --color-bg-raised: #ffffff;
+  --color-bg-inset: #e6e9ef; /* mantle */
+  --color-bg-overlay: rgb(76 79 105 / 0.4);
+
+  --color-text-primary: #4c4f69; /* text */
+  --color-text-secondary: #5c5f77; /* subtext1 — AA on canvas/surface/raised */
+  --color-text-tertiary: #6c6f85; /* subtext0 */
+  --color-text-disabled: #9ca0b0; /* overlay0 */
+  --color-text-on-accent: #ffffff; /* white on the mauve fill */
+
+  --color-border: #ccd0da; /* surface0 */
+  --color-border-strong: #acb0be; /* surface2 */
+
+  --color-accent: #8839ef; /* mauve */
+  --color-accent-hover: #7a2ce0;
+  --color-accent-pressed: #6b1fd0;
+  --color-accent-subtle: rgb(136 57 239 / 0.12);
+
+  --color-accent-fill: #8839ef;
+  --color-accent-fill-hover: #9550f0;
+  --color-accent-fill-pressed: #7a2ce0;
+
+  --color-success: #40a02b; /* green */
+  --color-danger: #d20f39; /* red */
+  --color-danger-hover: #b80d32;
+  --color-info: #1e66f5; /* blue */
+
+  --color-progress-track: rgb(76 79 105 / 0.14);
+  --color-skeleton: #e6e9ef;
+  --color-skeleton-sheen: #f2f4f7;
+  --shadow-raised: 0 1px 2px rgb(76 79 105 / 0.08), 0 6px 20px rgb(76 79 105 / 0.1);
+  --shadow-overlay: 0 4px 12px rgb(76 79 105 / 0.14), 0 24px 60px rgb(76 79 105 / 0.2);
+}

@@ -19,14 +19,22 @@ const (
 )
 
 type FFmpegRequest struct {
-	Binary          string
-	SourcePath      string
-	OutputDir       string
-	Decision        Decision
-	Capabilities    Capabilities
-	File            MediaFile
-	Streams         []Stream
-	StartSegment    int
+	Binary       string
+	SourcePath   string
+	OutputDir    string
+	Decision     Decision
+	Capabilities Capabilities
+	File         MediaFile
+	Streams      []Stream
+	StartSegment int
+	// SeekSeconds is the -ss position for restarted runs. It can sit below
+	// StartSegment*SegmentDuration when the copy tiers align the seek to the
+	// source keyframe that StartSegment's grid slot contains. Zero means
+	// derive it from StartSegment.
+	SeekSeconds float64
+	// TimestampOffset reproduces the make_non_negative shift from a run that
+	// started at the beginning when this run starts at a later keyframe.
+	TimestampOffset float64
 	SegmentDuration time.Duration
 }
 
@@ -46,8 +54,11 @@ func BuildFFmpegArgs(req FFmpegRequest) []string {
 		"-y",
 		"-v", "error",
 	}
-	if req.StartSegment > 0 {
-		seekS := float64(req.StartSegment) * segmentDuration.Seconds()
+	seekS := req.SeekSeconds
+	if seekS <= 0 && req.StartSegment > 0 {
+		seekS = float64(req.StartSegment) * segmentDuration.Seconds()
+	}
+	if seekS > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(seekS, 'f', 3, 64))
 	}
 	args = append(args, "-i", req.SourcePath)
@@ -88,12 +99,40 @@ func BuildFFmpegArgs(req FFmpegRequest) []string {
 		args = append(args, "-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds))
 	}
 
+	// The synthesized VOD playlist maps segment n to [n*4s, (n+1)*4s), and MSE
+	// places fragments by their embedded timestamps — so those timestamps must
+	// stay absolute across -ss restarts. -copyts keeps source timestamps
+	// (-start_at_zero normalizes containers with a nonzero start);
+	// make_non_negative only shifts codec-delay negatives, never a seeked run.
+	args = append(args,
+		"-copyts",
+		"-start_at_zero",
+		"-avoid_negative_ts", "make_non_negative",
+	)
+	if req.TimestampOffset > 0 {
+		args = append(args, "-output_ts_offset", strconv.FormatFloat(req.TimestampOffset, 'f', 6, 64))
+	}
+
+	// Copy tiers cut at every source keyframe. Their server-generated playlist
+	// uses the same indexed keyframes and variable durations, so every segment
+	// is independently decodable without lying about the timeline. A tiny HLS
+	// target makes the muxer close a segment at each next keyframe. Full
+	// transcodes retain the fixed grid created by -force_key_frames.
+	hlsTime := strconv.Itoa(segmentSeconds)
+	hlsFlags := "independent_segments+temp_file"
+	if req.Decision.Tier != TierFullTranscode {
+		hlsTime = "0.01"
+	}
+
 	args = append(args,
 		"-f", "hls",
-		"-hls_time", strconv.Itoa(segmentSeconds),
+		"-hls_time", hlsTime,
 		"-hls_playlist_type", "vod",
 		"-hls_segment_type", "fmp4",
-		"-hls_flags", "independent_segments",
+		"-hls_flags", hlsFlags,
+		// frag_discont writes absolute tfdt times instead of rebasing each run
+		// to zero behind an init.mp4 edit list the client never re-fetches.
+		"-hls_segment_options", "movflags=+frag_discont",
 		"-hls_fmp4_init_filename", "init.mp4",
 		"-hls_segment_filename", filepath.Join(req.OutputDir, "seg-%05d.m4s"),
 		"-start_number", strconv.Itoa(req.StartSegment),

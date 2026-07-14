@@ -1,0 +1,41 @@
+/* @theme
+   label: Dracula
+   base: dark
+*/
+/* Dracula — the classic dark palette (draculatheme.com). Purple accent, pink
+   danger and a bright green success on a slate background. */
+:root[data-theme='dracula'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #282a36;
+  --color-bg-surface: #343746;
+  --color-bg-raised: #414458;
+  --color-bg-inset: #21222c;
+  --color-bg-overlay: rgb(33 34 44 / 0.75);
+
+  --color-text-primary: #f8f8f2;
+  --color-text-secondary: #c3c6d8;
+  --color-text-tertiary: #8b90b0; /* brighter than the #6272a4 comment, for AA */
+  --color-text-disabled: #565a72;
+  --color-text-on-accent: #282a36; /* dark on the light-purple fill */
+
+  --color-border: #44475a;
+  --color-border-strong: #565a72;
+
+  --color-accent: #bd93f9; /* purple */
+  --color-accent-hover: #cba6fb;
+  --color-accent-pressed: #a678ec;
+  --color-accent-subtle: rgb(189 147 249 / 0.18);
+
+  --color-accent-fill: #bd93f9;
+  --color-accent-fill-hover: #cba6fb;
+  --color-accent-fill-pressed: #a678ec;
+
+  --color-success: #50fa7b; /* green */
+  --color-danger: #ff5555; /* red */
+  --color-danger-hover: #ff6e6e;
+  --color-info: #8be9fd; /* cyan */
+
+  --color-skeleton: #343746;
+  --color-skeleton-sheen: #44475a;
+}

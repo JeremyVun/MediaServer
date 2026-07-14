@@ -1,0 +1,41 @@
+/* @theme
+   label: Prime Video
+   base: dark
+*/
+/* Prime Video clone — dark slate-blue with the brand cyan as accent + fill
+   (near-black text on the bright cyan button). */
+:root[data-theme='primevideo'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #0f171e;
+  --color-bg-surface: #17212b;
+  --color-bg-raised: #202d3a;
+  --color-bg-inset: #0a1016;
+  --color-bg-overlay: rgb(10 16 22 / 0.75);
+
+  --color-text-primary: #f2f6fa;
+  --color-text-secondary: #aeb9c6;
+  --color-text-tertiary: #78828f;
+  --color-text-disabled: #4b535d;
+  --color-text-on-accent: #04141f; /* near-black on the cyan fill */
+
+  --color-border: #223140;
+  --color-border-strong: #33475a;
+
+  --color-accent: #22b8f0;
+  --color-accent-hover: #45c6f5;
+  --color-accent-pressed: #0090c4;
+  --color-accent-subtle: rgb(34 184 240 / 0.16);
+
+  --color-accent-fill: #00a8e1; /* Prime Video cyan */
+  --color-accent-fill-hover: #22b8f0;
+  --color-accent-fill-pressed: #0090c4;
+
+  --color-success: #46c37a;
+  --color-danger: #f2555a;
+  --color-danger-hover: #ff6a6f;
+  --color-info: #1399ff;
+
+  --color-skeleton: #17212b;
+  --color-skeleton-sheen: #202d3a;
+}

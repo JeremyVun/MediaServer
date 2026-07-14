@@ -83,7 +83,17 @@ func TestDirectStreamRangeHeadAndIfRange(t *testing.T) {
 
 func TestPlayReturnsHLSSessionWhenContainerNeedsRemux(t *testing.T) {
 	srv, st := newTestServer(t)
-	srv.playback = playback.NewManager(playback.Options{CacheDir: t.TempDir()})
+	toolsDir := t.TempDir()
+	ffprobe := filepath.Join(toolsDir, "ffprobe")
+	if err := os.WriteFile(ffprobe, []byte(`#!/bin/sh
+printf '%s\n' \
+  'pts_time=0.000000|dts_time=N/A|duration_time=0.040000|flags=K__' \
+  'pts_time=6.000000|dts_time=5.920000|duration_time=0.040000|flags=K__' \
+  'pts_time=11.960000|dts_time=11.880000|duration_time=0.040000|flags=___'
+`), 0o755); err != nil {
+		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	srv.playback = playback.NewManager(playback.Options{CacheDir: t.TempDir(), FFprobe: ffprobe})
 	ctx := context.Background()
 	item, file := seedProbedItem(t, ctx, st)
 	if err := st.UpdateFileProbe(ctx, file.ID, store.ProbeResult{

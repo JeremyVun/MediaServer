@@ -28,12 +28,14 @@ type Manager struct {
 	cacheDir string
 	maxBytes int64
 	ffmpeg   string
+	ffprobe  string
 	log      *slog.Logger
 
 	segmentDuration time.Duration
 	segmentWait     time.Duration
 	pollInterval    time.Duration
 	idleTimeout     time.Duration
+	sessionTimeout  time.Duration
 
 	videoSem chan struct{}
 
@@ -50,6 +52,7 @@ type Options struct {
 	CacheDir        string
 	MaxBytes        int64
 	FFmpeg          string
+	FFprobe         string
 	MaxVideoWorkers int
 	Log             *slog.Logger
 
@@ -57,6 +60,7 @@ type Options struct {
 	SegmentWait     time.Duration
 	PollInterval    time.Duration
 	IdleTimeout     time.Duration
+	SessionTimeout  time.Duration
 }
 
 type StartRequest struct {
@@ -93,15 +97,20 @@ func NewManager(opts Options) *Manager {
 	if opts.IdleTimeout <= 0 {
 		opts.IdleTimeout = 60 * time.Second
 	}
+	if opts.SessionTimeout <= 0 {
+		opts.SessionTimeout = 6 * time.Hour
+	}
 	return &Manager{
 		cacheDir:        opts.CacheDir,
 		maxBytes:        opts.MaxBytes,
 		ffmpeg:          opts.FFmpeg,
+		ffprobe:         opts.FFprobe,
 		log:             opts.Log,
 		segmentDuration: opts.SegmentDuration,
 		segmentWait:     opts.SegmentWait,
 		pollInterval:    opts.PollInterval,
 		idleTimeout:     opts.IdleTimeout,
+		sessionTimeout:  opts.SessionTimeout,
 		videoSem:        make(chan struct{}, opts.MaxVideoWorkers),
 		sessions:        make(map[string]*Session),
 		workers:         make(map[string]*worker),
@@ -145,6 +154,15 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 	}
 	_ = m.PruneCache(ctx)
 
+	var keyframes *keyframeIndex
+	if req.Decision.Tier == TierRemux || req.Decision.Tier == TierAudioTranscode {
+		idx, err := loadOrProbeKeyframes(ctx, m.cacheDir, m.ffprobe, req.SourcePath, req.File)
+		if err != nil {
+			return Session{}, fmt.Errorf("index playback keyframes: %w", err)
+		}
+		keyframes = &idx
+	}
+
 	sid, err := randomID()
 	if err != nil {
 		return Session{}, err
@@ -162,6 +180,7 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 			log:             m.log,
 			videoSem:        m.videoSem,
 			procs:           &m.procs,
+			keyframes:       keyframes,
 			segmentDuration: m.segmentDuration,
 			segmentWait:     m.segmentWait,
 			pollInterval:    m.pollInterval,
@@ -312,28 +331,33 @@ func (m *Manager) activeCacheDirs() map[string]bool {
 	return active
 }
 
+// reapIdle enforces two tiers of idleness. After idleTimeout the ffmpeg child
+// is killed but the session, worker, and cached segments all survive — clients
+// that buffer minutes ahead (Safari native HLS) legitimately go quiet longer
+// than the timeout and must be able to come back and resume; the transcode
+// restarts on demand at whatever segment they ask for next. Only after
+// sessionTimeout (a browser that vanished without its pagehide beacon) is the
+// session mapping dropped.
 func (m *Manager) reapIdle(now time.Time) {
 	m.mu.Lock()
-	type stopped struct {
-		key string
-		w   *worker
-	}
-	var stop []stopped
+	var stop []*worker
 	for key, w := range m.workers {
-		if !w.idleSince(now, m.idleTimeout) {
-			continue
-		}
-		stop = append(stop, stopped{key: key, w: w})
-		for sid, session := range m.sessions {
-			if session.WorkerKey == key {
-				delete(m.sessions, sid)
+		switch {
+		case w.idleSince(now, m.sessionTimeout):
+			for sid, session := range m.sessions {
+				if session.WorkerKey == key {
+					delete(m.sessions, sid)
+				}
 			}
+			delete(m.workers, key)
+			stop = append(stop, w)
+		case w.idleSince(now, m.idleTimeout):
+			stop = append(stop, w)
 		}
-		delete(m.workers, key)
 	}
 	m.mu.Unlock()
-	for _, item := range stop {
-		item.w.stop()
+	for _, w := range stop {
+		w.stop()
 	}
 }
 
@@ -342,10 +366,11 @@ type worker struct {
 	dir string
 	req StartRequest
 
-	ffmpeg   string
-	log      *slog.Logger
-	videoSem chan struct{}
-	procs    *sync.WaitGroup
+	ffmpeg    string
+	log       *slog.Logger
+	videoSem  chan struct{}
+	procs     *sync.WaitGroup
+	keyframes *keyframeIndex
 
 	segmentDuration time.Duration
 	segmentWait     time.Duration
@@ -356,7 +381,6 @@ type worker struct {
 	cmdToken    *struct{}
 	running     bool
 	startNumber int
-	startedAt   time.Time
 	lastAccess  time.Time
 	semHeld     bool
 	stderr      *tailBuffer
@@ -375,19 +399,21 @@ func (w *worker) idleSince(now time.Time, timeout time.Duration) bool {
 }
 
 func (w *worker) playlist() string {
+	if w.keyframes != nil {
+		return w.keyframePlaylist()
+	}
+
 	duration := w.req.File.DurationS
 	if duration <= 0 {
 		duration = w.segmentDuration.Seconds()
 	}
-	count := int(math.Ceil(duration / w.segmentDuration.Seconds()))
-	if count < 1 {
-		count = 1
-	}
+	count := w.segmentCount()
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
 	b.WriteString("#EXT-X-VERSION:7\n")
 	b.WriteString("#EXT-X-TARGETDURATION:" + strconv.Itoa(int(math.Ceil(w.segmentDuration.Seconds()))) + "\n")
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
+	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
 	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
 	for i := 0; i < count; i++ {
 		remaining := duration - float64(i)*w.segmentDuration.Seconds()
@@ -397,6 +423,22 @@ func (w *worker) playlist() string {
 		}
 		b.WriteString("#EXTINF:" + strconv.FormatFloat(segDuration, 'f', 3, 64) + ",\n")
 		b.WriteString(segmentName(i) + "\n")
+	}
+	b.WriteString("#EXT-X-ENDLIST\n")
+	return b.String()
+}
+
+func (w *worker) keyframePlaylist() string {
+	var b strings.Builder
+	b.WriteString("#EXTM3U\n")
+	b.WriteString("#EXT-X-VERSION:7\n")
+	b.WriteString("#EXT-X-TARGETDURATION:" + strconv.Itoa(w.keyframes.targetDuration()) + "\n")
+	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
+	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
+	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
+	for n := range w.keyframes.Starts {
+		b.WriteString("#EXTINF:" + strconv.FormatFloat(w.keyframes.segmentDuration(n), 'f', 6, 64) + ",\n")
+		b.WriteString(segmentName(n) + "\n")
 	}
 	b.WriteString("#EXT-X-ENDLIST\n")
 	return b.String()
@@ -440,7 +482,7 @@ func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, name stri
 func (w *worker) ensureSegment(ctx context.Context, n int) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.running && n >= w.startNumber && n <= w.forwardHighLocked(time.Now()) {
+	if w.running && n >= w.startNumber && n <= w.diskHighLocked()+w.forwardWindow() {
 		return nil
 	}
 	return w.startLocked(ctx, n)
@@ -461,6 +503,21 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 		return err
 	}
 
+	startNumber, seekS := n, float64(n)*w.segmentDuration.Seconds()
+	startTime := seekS
+	timestampOffset := 0.0
+	if w.keyframes != nil {
+		seekS = 0
+		startTime = w.keyframes.Starts[n] - w.keyframes.Starts[0]
+		if n > 0 {
+			// Input -ss has a small B-frame preroll. Asking just after the indexed
+			// random-access point makes demuxer seeking land on that point instead
+			// of falling back one whole GOP.
+			seekS = w.keyframes.Starts[n] + 0.2
+			timestampOffset = w.keyframes.TimestampShift
+		}
+	}
+
 	semHeld := false
 	if w.req.Decision.Tier == TierFullTranscode {
 		select {
@@ -471,7 +528,7 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 		}
 	}
 
-	procCtx, cancel := context.WithTimeout(context.Background(), processTimeout(w.req.File.DurationS, n, w.segmentDuration))
+	procCtx, cancel := context.WithTimeout(context.Background(), processTimeout(w.req.File.DurationS, startTime))
 	cmd := ffmpegCommand(procCtx, FFmpegRequest{
 		Binary:          w.ffmpeg,
 		SourcePath:      w.req.SourcePath,
@@ -480,7 +537,9 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 		Capabilities:    w.req.Capabilities,
 		File:            w.req.File,
 		Streams:         w.req.Streams,
-		StartSegment:    n,
+		StartSegment:    startNumber,
+		SeekSeconds:     seekS,
+		TimestampOffset: timestampOffset,
 		SegmentDuration: w.segmentDuration,
 	}, w.log)
 	stderr := newTailBuffer(32 * 1024)
@@ -496,8 +555,7 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	token := &struct{}{}
 	w.cmdToken = token
 	w.running = true
-	w.startNumber = n
-	w.startedAt = time.Now()
+	w.startNumber = startNumber
 	w.semHeld = semHeld
 	w.stderr = stderr
 
@@ -543,28 +601,59 @@ func (w *worker) stopLocked() {
 	w.running = false
 }
 
-func (w *worker) forwardHighLocked(now time.Time) int {
-	elapsedSegments := int(now.Sub(w.startedAt) / w.segmentDuration)
-	if elapsedSegments < 0 {
-		elapsedSegments = 0
+// diskHighLocked reports the highest segment number present in the cache dir —
+// the ground truth of transcode progress. The old wall-clock estimate assumed
+// exactly 1× realtime, so a fast remux looked "behind" and a prefetching
+// client's miss would kill and restart a healthy ffmpeg mid-stream.
+func (w *worker) diskHighLocked() int {
+	high := w.startNumber - 1
+	entries, err := os.ReadDir(w.dir)
+	if err != nil {
+		return high
 	}
-	return w.startNumber + elapsedSegments + 4
+	for _, entry := range entries {
+		if n, ok := parseSegmentName(entry.Name()); ok && n > high {
+			high = n
+		}
+	}
+	return high
 }
 
+// forwardWindow is how far past ffmpeg's newest segment a request may wait
+// rather than trigger a seek-restart — sized so a ≥1× transcode can plausibly
+// produce the segment within one segmentWait.
+func (w *worker) forwardWindow() int {
+	window := int(w.segmentWait / w.segmentDuration)
+	if window < 4 {
+		window = 4
+	}
+	return window
+}
+
+// tailSlopS absorbs the gap between the probed container duration and where
+// the streams actually end (audio priming, container rounding). Without it a
+// file probed at 60.023 s advertises a 16th segment ffmpeg never writes, and
+// the player hangs on a 504 at the end of the video. A sub-half-second sliver
+// folds into the previous segment's EXTINF instead.
+const tailSlopS = 0.5
+
 func (w *worker) segmentCount() int {
+	if w.keyframes != nil {
+		return len(w.keyframes.Starts)
+	}
 	duration := w.req.File.DurationS
 	if duration <= 0 {
 		return 1
 	}
-	count := int(math.Ceil(duration / w.segmentDuration.Seconds()))
+	count := int(math.Ceil((duration - tailSlopS) / w.segmentDuration.Seconds()))
 	if count < 1 {
 		return 1
 	}
 	return count
 }
 
-func processTimeout(durationS float64, startSegment int, segmentDuration time.Duration) time.Duration {
-	remaining := durationS - float64(startSegment)*segmentDuration.Seconds()
+func processTimeout(durationS, startTime float64) time.Duration {
+	remaining := durationS - startTime
 	if remaining <= 0 {
 		remaining = durationS
 	}

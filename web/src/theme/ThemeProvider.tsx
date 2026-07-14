@@ -7,9 +7,12 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { THEME_VALUES } from './registry.ts'
 
-export type ThemePreference = 'system' | 'dark' | 'light'
-export type ResolvedTheme = 'dark' | 'light'
+// 'system' | built-in | any custom theme name from the registry. The
+// (string & {}) member keeps literal autocomplete while allowing any value.
+export type ThemePreference = 'system' | 'dark' | 'light' | (string & {})
+export type ResolvedTheme = string
 
 interface ThemeContextValue {
   /** The stored preference (may be 'system'). */
@@ -25,7 +28,8 @@ const STORAGE_KEY = 'theme'
 
 function readPreference(): ThemePreference {
   const stored = localStorage.getItem(STORAGE_KEY)
-  return stored === 'dark' || stored === 'light' ? stored : 'system'
+  // Validate against the live registry so a deleted theme resets to system.
+  return stored && THEME_VALUES.has(stored) ? stored : 'system'
 }
 
 function systemTheme(): ResolvedTheme {

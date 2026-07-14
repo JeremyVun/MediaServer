@@ -1,0 +1,81 @@
+/* -----------------------------------------------------------------------
+   CUSTOM THEME TEMPLATE — copy this file to create a new colour scheme.
+
+   1. Copy to  NAME.theme.css   (e.g. deepsea.theme.css). The `.theme.css`
+      suffix is what the registry discovers; this `_template.css` is ignored.
+   2. Rename the selector to  :root[data-theme='NAME']  — NAME must equal the
+      file stem, and must NOT be dark / light / system (those are reserved).
+   3. Fill in the `label` and `base` in the header below, and the tokens.
+   4. Run `npm run dev` to preview live (HMR re-skins instantly); `make build`
+      to bake it into the deployed binary. `make test` fails the build if any
+      text/background pair drops below WCAG AA.
+
+   CONTRACT (the mechanism only reskins if you honour these):
+   - base: dark  → you may override ONLY the tokens you want to change; the
+     rest inherit the built-in dark palette from tokens.css.
+   - base: light → you MUST set every token below. A custom name never matches
+     the built-in [data-theme='light'] block, so anything you omit falls back
+     to the DARK default (e.g. a forgotten text colour = white text on white).
+   - Always keep `color-scheme` matching `base` (drives native form controls,
+     scrollbars, and the canvas).
+   - The three alpha tokens (bg-overlay, accent-subtle, progress-track) MUST
+     stay translucent rgb(… / α) — a solid colour breaks scrims and tints.
+   - AA: text-primary / text-secondary must clear 4.5:1 on canvas, surface and
+     raised; text-on-accent must clear 4.5:1 on accent-fill.
+   - accent-fill* are the button fills; accent / accent-hover / accent-pressed
+     are amber-as-text/border. They may be the same hue or differ (the built-in
+     light theme darkens accent-as-text for AA while keeping the amber fill).
+   - Do NOT redefine typography, spacing, radius, motion, z-index or the focus
+     ring here — those are theme-independent and live in tokens.css. The focus
+     ring recolours itself from your canvas + accent automatically.
+   ----------------------------------------------------------------------- */
+
+/* @theme
+   label: My Theme
+   base: dark
+*/
+:root[data-theme='mytheme'] {
+  color-scheme: dark;
+
+  /* Backgrounds — elevation = lightness */
+  --color-bg-canvas: #0c0d10;
+  --color-bg-surface: #15171c;
+  --color-bg-raised: #1d2026;
+  --color-bg-inset: #08090b;
+  --color-bg-overlay: rgb(12 13 16 / 0.72); /* keep the alpha */
+
+  /* Text */
+  --color-text-primary: #f2f3f5;
+  --color-text-secondary: #a9aeb8; /* AA on all bg tokens */
+  --color-text-tertiary: #6e7482;
+  --color-text-disabled: #4a4f5a;
+  --color-text-on-accent: #201403; /* AA on accent-fill */
+
+  /* Borders & lines */
+  --color-border: #262a32;
+  --color-border-strong: #363b45;
+
+  /* Accent — as text / border */
+  --color-accent: #e8a33d;
+  --color-accent-hover: #f2b355;
+  --color-accent-pressed: #d18f2b;
+  --color-accent-subtle: rgb(232 163 61 / 0.14); /* keep the alpha */
+
+  /* Accent — button fills */
+  --color-accent-fill: #e8a33d;
+  --color-accent-fill-hover: #f2b355;
+  --color-accent-fill-pressed: #d18f2b;
+
+  /* Status */
+  --color-success: #55b467;
+  --color-danger: #e5484d;
+  --color-danger-hover: #ec5d62;
+  --color-info: #5b7fde;
+
+  /* Component-level */
+  --color-progress-track: rgb(255 255 255 / 0.18); /* keep the alpha */
+  --color-skeleton: #1b1e24;
+  --color-skeleton-sheen: #262a32;
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.5), 0 8px 24px rgb(0 0 0 / 0.35);
+  --shadow-overlay: 0 4px 12px rgb(0 0 0 / 0.6), 0 24px 60px rgb(0 0 0 / 0.5);
+}

@@ -8,6 +8,8 @@ import { SSEProvider } from './api/sse.tsx'
 import { UploadProvider } from './features/upload/UploadProvider.tsx'
 import App from './App.tsx'
 import './theme/tokens.css'
+// Discovers and bundles custom themes from src/theme/themes/*.theme.css.
+import './theme/registry.ts'
 
 const queryClient = new QueryClient({
   defaultOptions: {

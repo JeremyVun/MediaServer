@@ -1,0 +1,41 @@
+/* @theme
+   label: Disney+
+   base: dark
+*/
+/* Disney+ clone — deep royal-navy with the brand blue as the CTA fill (white
+   on blue) and a brighter sky-blue as accent-as-text for legibility on navy. */
+:root[data-theme='disneyplus'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #0e1630; /* deep, near-black navy — Disney's cinematic chrome */
+  --color-bg-surface: #16224a;
+  --color-bg-raised: #1f2f5a;
+  --color-bg-inset: #070e20;
+  --color-bg-overlay: rgb(6 12 26 / 0.78);
+
+  --color-text-primary: #f5f8ff;
+  --color-text-secondary: #b8c4dc;
+  --color-text-tertiary: #7e8bab;
+  --color-text-disabled: #4e5a78;
+  --color-text-on-accent: #ffffff; /* white on the blue fill */
+
+  --color-border: #223258;
+  --color-border-strong: #33477a;
+
+  --color-accent: #4a90ff; /* sky blue — legible as text on navy */
+  --color-accent-hover: #66a3ff;
+  --color-accent-pressed: #2f7aef;
+  --color-accent-subtle: rgb(74 144 255 / 0.16);
+
+  --color-accent-fill: #0063e5; /* Disney+ brand blue */
+  --color-accent-fill-hover: #1a75ff;
+  --color-accent-fill-pressed: #0052c4;
+
+  --color-success: #3fbf6a;
+  --color-danger: #ff5a5f;
+  --color-danger-hover: #ff7377;
+  --color-info: #4a90ff;
+
+  --color-skeleton: #16224a;
+  --color-skeleton-sheen: #1f2f5a;
+}

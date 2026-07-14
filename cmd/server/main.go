@@ -87,6 +87,7 @@ func run() error {
 		CacheDir:        cfg.HLSCache.Dir,
 		MaxBytes:        int64(cfg.HLSCache.MaxGB * 1000 * 1000 * 1000),
 		FFmpeg:          cfg.Transcode.FFmpeg,
+		FFprobe:         cfg.Transcode.FFprobe,
 		MaxVideoWorkers: cfg.Transcode.MaxConcurrent,
 		Log:             logger,
 	})

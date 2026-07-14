@@ -1,0 +1,37 @@
+/* @theme
+   label: Deep Sea
+   base: dark
+*/
+/* Example custom theme — a cool teal dark scheme. Dark base, so it overrides
+   only what differs from the built-in dark palette; status colours, shadows
+   and the progress track inherit. Delete this file if you don't want it. */
+:root[data-theme='deepsea'] {
+  color-scheme: dark;
+
+  --color-bg-canvas: #0a1417;
+  --color-bg-surface: #0f1e23;
+  --color-bg-raised: #162b31;
+  --color-bg-inset: #060f11;
+  --color-bg-overlay: rgb(10 20 23 / 0.72);
+
+  --color-text-primary: #e6f2f1;
+  --color-text-secondary: #9db8b6;
+  --color-text-tertiary: #6a8583;
+  --color-text-disabled: #47605e;
+  --color-text-on-accent: #06201e;
+
+  --color-border: #21393f;
+  --color-border-strong: #315057;
+
+  --color-accent: #4ecdc4;
+  --color-accent-hover: #63ddd4;
+  --color-accent-pressed: #3aa79f;
+  --color-accent-subtle: rgb(78 205 196 / 0.14);
+
+  --color-accent-fill: #3fb8af;
+  --color-accent-fill-hover: #52ccc2;
+  --color-accent-fill-pressed: #329e96;
+
+  --color-skeleton: #14262b;
+  --color-skeleton-sheen: #21393f;
+}

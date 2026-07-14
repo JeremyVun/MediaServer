@@ -1,0 +1,55 @@
+/* @theme
+   label: Netflix
+   base: dark
+*/
+/* Netflix clone — the streaming look: near-black canvas, cards that lift on a
+   dark ramp, and the signature red (#e50914) as both accent and button fill
+   with white text on top. Dark base, so status greens/blues, the progress
+   track and motion inherit from the built-in dark palette; we override the
+   near-black elevation ramp, the red accent/fills, and the on-accent text
+   (white on red — not the amber theme's dark ink). */
+:root[data-theme='netflix'] {
+  color-scheme: dark;
+
+  /* Backgrounds — Netflix's flat near-black; elevation by a touch of lightness */
+  --color-bg-canvas: #141414; /* the Netflix grey-black app background */
+  --color-bg-surface: #1e1e1e; /* rows, cards, nav */
+  --color-bg-raised: #2b2b2b; /* dialogs, menus, hover-lifted cards */
+  --color-bg-inset: #0a0a0a; /* wells: inputs, scrub track */
+  --color-bg-overlay: rgb(0 0 0 / 0.75); /* keep the alpha — billboard scrims */
+
+  /* Text — Netflix white with its muted grey secondary */
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #b3b3b3; /* the Netflix caption grey — AA on all bg tokens */
+  --color-text-tertiary: #808080;
+  --color-text-disabled: #595959;
+  --color-text-on-accent: #ffffff; /* white on the red fill — AA */
+
+  /* Borders & lines */
+  --color-border: #2e2e2e;
+  --color-border-strong: #454545;
+
+  /* Accent — Netflix red, as text / border */
+  --color-accent: #e50914;
+  --color-accent-hover: #f6121d;
+  --color-accent-pressed: #b1060f;
+  --color-accent-subtle: rgb(229 9 20 / 0.16); /* keep the alpha — active chips, selected rows */
+
+  /* Accent — button fills (the play / CTA red) */
+  --color-accent-fill: #e50914;
+  --color-accent-fill-hover: #f6121d;
+  --color-accent-fill-pressed: #b1060f;
+
+  /* Danger — shifted off the brand scarlet to a rosier crimson so destructive
+     buttons and error states don't read as a faded copy of the red CTA (the
+     dark default #e5484d shares the scarlet's red channel). Balanced tone:
+     legible as white-on-fill AND as text on the near-black canvas. */
+  --color-danger: #e23e57;
+  --color-danger-hover: #ec5266;
+
+  /* Component-level — blacker skeleton + deeper shadows for the card-lift look */
+  --color-skeleton: #1e1e1e;
+  --color-skeleton-sheen: #2e2e2e;
+  --shadow-raised: 0 2px 6px rgb(0 0 0 / 0.6), 0 12px 32px rgb(0 0 0 / 0.5);
+  --shadow-overlay: 0 6px 16px rgb(0 0 0 / 0.7), 0 28px 64px rgb(0 0 0 / 0.6);
+}

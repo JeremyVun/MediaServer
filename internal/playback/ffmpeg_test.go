@@ -20,6 +20,13 @@ func TestBuildFFmpegArgsModes(t *testing.T) {
 	assertContainsSequence(t, remux, "-c:a", "copy")
 	assertContainsSequence(t, remux, "-hls_segment_type", "fmp4")
 	assertContainsSequence(t, remux, "-hls_segment_filename", "/cache/seg-%05d.m4s")
+	// Copy tiers close every segment on a real source keyframe. The server's
+	// indexed playlist advertises the matching variable durations.
+	assertContainsSequence(t, remux, "-hls_time", "0.01")
+	assertContainsSequence(t, remux, "-hls_flags", "independent_segments+temp_file")
+	assertContainsSequence(t, remux, "-copyts", "-start_at_zero")
+	assertContainsSequence(t, remux, "-avoid_negative_ts", "make_non_negative")
+	assertContainsSequence(t, remux, "-hls_segment_options", "movflags=+frag_discont")
 
 	audio := BuildFFmpegArgs(FFmpegRequest{
 		SourcePath: "/media/movie.mkv",
@@ -43,6 +50,8 @@ func TestBuildFFmpegArgsModes(t *testing.T) {
 	assertContainsSequence(t, full, "-c:v", "h264_videotoolbox")
 	assertContainsSequence(t, full, "-b:v", "6000k")
 	assertContainsSequence(t, full, "-start_number", "3")
+	assertContainsSequence(t, full, "-hls_flags", "independent_segments+temp_file")
+	assertContainsSequence(t, full, "-copyts", "-start_at_zero")
 }
 
 func TestBuildFFmpegArgsBurnInAndHEVC(t *testing.T) {
