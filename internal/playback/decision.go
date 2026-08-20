@@ -16,6 +16,7 @@ const (
 	ReasonVideoCodec           = "video_codec"
 	ReasonContainerUnsupported = "container_not_supported"
 	ReasonSubtitleBurnIn       = "subtitle_burn_in"
+	ReasonAudioTrackSelection  = "audio_track_selection"
 
 	TierDirect         = "direct"
 	TierRemux          = "remux"
@@ -55,11 +56,22 @@ type Decision struct {
 	Reason    string
 	Tier      string
 	BurnIn    *Stream
+	AudioPick *Stream
 	VideoCopy bool
 	AudioCopy bool
 }
 
-func Decide(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamIndex *int) Decision {
+// Decide picks direct play or an HLS tier. A non-nil audioStreamIndex always
+// yields HLS: browsers cannot switch audio tracks on a plain <video src>, so
+// clients omit it for the container's default track and any explicit pick is
+// remapped by ffmpeg. Codec support then only matters for the picked stream.
+func Decide(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamIndex, audioStreamIndex *int) Decision {
+	var audioPick *Stream
+	if audioStreamIndex != nil {
+		if st, ok := FindStream(streams, *audioStreamIndex); ok && st.Kind == "audio" {
+			audioPick = &st
+		}
+	}
 	if subtitleStreamIndex != nil {
 		if st, ok := FindStream(streams, *subtitleStreamIndex); ok && IsImageSubtitle(st.Codec) {
 			return Decision{
@@ -67,25 +79,29 @@ func Decide(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamI
 				Reason:    ReasonSubtitleBurnIn,
 				Tier:      TierFullTranscode,
 				BurnIn:    &st,
+				AudioPick: audioPick,
 				VideoCopy: false,
-				AudioCopy: audioStreamsSupported(streams, caps),
+				AudioCopy: audioStreamsSupported(streams, caps, audioPick),
 			}
 		}
 	}
 
 	videoOK := videoStreamsSupported(file, streams, caps)
-	audioOK := audioStreamsSupported(streams, caps)
+	audioOK := audioStreamsSupported(streams, caps, audioPick)
 	containerOK := containerSupported(file.Container, caps.Containers)
-	if videoOK && audioOK && containerOK {
+	if videoOK && audioOK && containerOK && audioPick == nil {
 		return Decision{Mode: ModeDirect, Tier: TierDirect, VideoCopy: true, AudioCopy: true}
 	}
 	if !videoOK {
-		return Decision{Mode: ModeHLS, Reason: ReasonVideoCodec, Tier: TierFullTranscode, VideoCopy: false, AudioCopy: audioOK}
+		return Decision{Mode: ModeHLS, Reason: ReasonVideoCodec, Tier: TierFullTranscode, AudioPick: audioPick, VideoCopy: false, AudioCopy: audioOK}
 	}
 	if !audioOK {
-		return Decision{Mode: ModeHLS, Reason: ReasonAudioCodec, Tier: TierAudioTranscode, VideoCopy: true, AudioCopy: false}
+		return Decision{Mode: ModeHLS, Reason: ReasonAudioCodec, Tier: TierAudioTranscode, AudioPick: audioPick, VideoCopy: true, AudioCopy: false}
 	}
-	return Decision{Mode: ModeHLS, Reason: ReasonContainerUnsupported, Tier: TierRemux, VideoCopy: true, AudioCopy: true}
+	if !containerOK {
+		return Decision{Mode: ModeHLS, Reason: ReasonContainerUnsupported, Tier: TierRemux, AudioPick: audioPick, VideoCopy: true, AudioCopy: true}
+	}
+	return Decision{Mode: ModeHLS, Reason: ReasonAudioTrackSelection, Tier: TierRemux, AudioPick: audioPick, VideoCopy: true, AudioCopy: true}
 }
 
 func FindStream(streams []Stream, streamIndex int) (Stream, bool) {
@@ -130,7 +146,7 @@ func IsImageSubtitle(codec string) bool {
 // independently decodable, source-keyframe-aligned segments.
 const profileVersion = 3
 
-func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleStreamIndex *int) string {
+func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleStreamIndex, audioStreamIndex *int) string {
 	profile := struct {
 		Version             int          `json:"version"`
 		FileID              int64        `json:"file_id"`
@@ -143,6 +159,7 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 		Tier                string       `json:"tier"`
 		Reason              string       `json:"reason,omitempty"`
 		SubtitleStreamIndex *int         `json:"subtitle_stream_index,omitempty"`
+		AudioStreamIndex    *int         `json:"audio_stream_index,omitempty"`
 	}{
 		Version:             profileVersion,
 		FileID:              file.ID,
@@ -155,6 +172,7 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 		Tier:                decision.Tier,
 		Reason:              decision.Reason,
 		SubtitleStreamIndex: subtitleStreamIndex,
+		AudioStreamIndex:    audioStreamIndex,
 	}
 	raw, _ := json.Marshal(profile)
 	sum := sha256.Sum256(raw)
@@ -176,7 +194,10 @@ func videoStreamsSupported(file MediaFile, streams []Stream, caps Capabilities) 
 	return true
 }
 
-func audioStreamsSupported(streams []Stream, caps Capabilities) bool {
+func audioStreamsSupported(streams []Stream, caps Capabilities, pick *Stream) bool {
+	if pick != nil {
+		return codecSupported(pick.Codec, caps.AudioCodecs)
+	}
 	for _, st := range streams {
 		if st.Kind == "audio" && !codecSupported(st.Codec, caps.AudioCodecs) {
 			return false

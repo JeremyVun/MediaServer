@@ -63,6 +63,10 @@ func BuildFFmpegArgs(req FFmpegRequest) []string {
 	}
 	args = append(args, "-i", req.SourcePath)
 
+	audioMap := "0:a:0?"
+	if req.Decision.AudioPick != nil {
+		audioMap = "0:" + strconv.Itoa(req.Decision.AudioPick.StreamIndex)
+	}
 	if req.Decision.BurnIn != nil {
 		filter := fmt.Sprintf("[0:v:0][0:%d]overlay", req.Decision.BurnIn.StreamIndex)
 		if req.Capabilities.MaxHeight > 0 && req.File.Height > req.Capabilities.MaxHeight {
@@ -72,12 +76,12 @@ func BuildFFmpegArgs(req FFmpegRequest) []string {
 		args = append(args,
 			"-filter_complex", filter,
 			"-map", "[v]",
-			"-map", "0:a:0?",
+			"-map", audioMap,
 		)
 	} else {
 		args = append(args,
 			"-map", "0:v:0?",
-			"-map", "0:a:0?",
+			"-map", audioMap,
 			"-sn",
 		)
 	}

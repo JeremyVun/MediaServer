@@ -7,6 +7,7 @@ export function usePlaybackSession(
   itemID: number,
   fileID: number | null,
   subtitleStreamIndex: number | null,
+  audioStreamIndex: number | null,
 ) {
   const capabilities = useCapabilities()
   const request = useMemo<PlayRequest>(
@@ -14,8 +15,9 @@ export function usePlaybackSession(
       file_id: fileID ?? undefined,
       capabilities,
       subtitle_stream_index: subtitleStreamIndex ?? undefined,
+      audio_stream_index: audioStreamIndex ?? undefined,
     }),
-    [capabilities, fileID, subtitleStreamIndex],
+    [audioStreamIndex, capabilities, fileID, subtitleStreamIndex],
   )
   const query = usePlayItem(itemID, request)
   return { ...query, capabilities }

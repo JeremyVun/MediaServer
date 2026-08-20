@@ -18,6 +18,7 @@ func TestBuildFFmpegArgsModes(t *testing.T) {
 	})
 	assertContainsSequence(t, remux, "-c:v", "copy")
 	assertContainsSequence(t, remux, "-c:a", "copy")
+	assertContainsSequence(t, remux, "-map", "0:a:0?")
 	assertContainsSequence(t, remux, "-hls_segment_type", "fmp4")
 	assertContainsSequence(t, remux, "-hls_segment_filename", "/cache/seg-%05d.m4s")
 	// Copy tiers close every segment on a real source keyframe. The server's
@@ -52,6 +53,35 @@ func TestBuildFFmpegArgsModes(t *testing.T) {
 	assertContainsSequence(t, full, "-start_number", "3")
 	assertContainsSequence(t, full, "-hls_flags", "independent_segments+temp_file")
 	assertContainsSequence(t, full, "-copyts", "-start_at_zero")
+}
+
+func TestBuildFFmpegArgsAudioPick(t *testing.T) {
+	file := MediaFile{ID: 1, DurationS: 60, Width: 1920, Height: 1080}
+	args := BuildFFmpegArgs(FFmpegRequest{
+		SourcePath: "/media/movie.mkv",
+		OutputDir:  "/cache",
+		File:       file,
+		Decision: Decision{
+			Tier:      TierRemux,
+			Reason:    ReasonAudioTrackSelection,
+			AudioPick: &Stream{StreamIndex: 2, Kind: "audio", Codec: "aac"},
+		},
+	})
+	assertContainsSequence(t, args, "-map", "0:2")
+	assertContainsSequence(t, args, "-c:a", "copy")
+
+	burnIn := BuildFFmpegArgs(FFmpegRequest{
+		SourcePath: "/media/movie.mkv",
+		OutputDir:  "/cache",
+		File:       file,
+		Decision: Decision{
+			Tier:      TierFullTranscode,
+			Reason:    ReasonSubtitleBurnIn,
+			BurnIn:    &Stream{StreamIndex: 4, Kind: "subtitle", Codec: "hdmv_pgs_subtitle"},
+			AudioPick: &Stream{StreamIndex: 2, Kind: "audio", Codec: "aac"},
+		},
+	})
+	assertContainsSequence(t, burnIn, "-map", "0:2")
 }
 
 func TestBuildFFmpegArgsBurnInAndHEVC(t *testing.T) {

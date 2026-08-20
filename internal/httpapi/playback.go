@@ -18,6 +18,7 @@ type playRequest struct {
 	FileID              *int64                   `json:"file_id"`
 	Capabilities        playbackpkg.Capabilities `json:"capabilities"`
 	SubtitleStreamIndex *int                     `json:"subtitle_stream_index"`
+	AudioStreamIndex    *int                     `json:"audio_stream_index"`
 }
 
 type playResponse struct {
@@ -82,8 +83,15 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.AudioStreamIndex != nil {
+		st, ok := playbackpkg.FindStream(playbackStreams, *req.AudioStreamIndex)
+		if !ok || st.Kind != "audio" {
+			writeError(w, http.StatusBadRequest, "bad_request", "audio stream not found")
+			return
+		}
+	}
 	media := toPlaybackFile(file)
-	decision := playbackpkg.Decide(media, playbackStreams, req.Capabilities, req.SubtitleStreamIndex)
+	decision := playbackpkg.Decide(media, playbackStreams, req.Capabilities, req.SubtitleStreamIndex, req.AudioStreamIndex)
 	subtitles := subtitleResponses(file.ID, streams)
 	if decision.Mode == playbackpkg.ModeDirect {
 		writeJSON(w, http.StatusOK, playResponse{
@@ -105,6 +113,7 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		Capabilities:        req.Capabilities,
 		Decision:            decision,
 		SubtitleStreamIndex: req.SubtitleStreamIndex,
+		AudioStreamIndex:    req.AudioStreamIndex,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "starting playback session failed")

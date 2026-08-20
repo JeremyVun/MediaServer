@@ -70,6 +70,7 @@ type StartRequest struct {
 	Capabilities        Capabilities
 	Decision            Decision
 	SubtitleStreamIndex *int
+	AudioStreamIndex    *int
 }
 
 type Session struct {
@@ -146,7 +147,7 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 	if err := os.MkdirAll(m.cacheDir, 0o755); err != nil {
 		return Session{}, fmt.Errorf("create hls cache: %w", err)
 	}
-	hash := ProfileHash(req.File, req.Capabilities, req.Decision, req.SubtitleStreamIndex)
+	hash := ProfileHash(req.File, req.Capabilities, req.Decision, req.SubtitleStreamIndex, req.AudioStreamIndex)
 	key := strconv.FormatInt(req.File.ID, 10) + "/" + hash
 	dir := filepath.Join(m.cacheDir, strconv.FormatInt(req.File.ID, 10), hash)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

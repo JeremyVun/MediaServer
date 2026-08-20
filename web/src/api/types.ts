@@ -123,6 +123,7 @@ export interface PlayRequest {
   file_id?: number
   capabilities: PlayCapabilities
   subtitle_stream_index?: number
+  audio_stream_index?: number
 }
 
 export interface Subtitle {
@@ -133,7 +134,13 @@ export interface Subtitle {
 
 export interface PlayResponse {
   mode: 'direct' | 'hls'
-  reason: null | 'audio_codec' | 'video_codec' | 'container_not_supported' | 'subtitle_burn_in'
+  reason:
+    | null
+    | 'audio_codec'
+    | 'video_codec'
+    | 'container_not_supported'
+    | 'subtitle_burn_in'
+    | 'audio_track_selection'
   url: string
   session_id?: string
   subtitles: Subtitle[]

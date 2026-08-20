@@ -10,6 +10,7 @@ import type Hls from 'hls.js'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
   ArrowLeft,
+  AudioLines,
   Cast,
   Captions,
   ChevronDown,
@@ -140,7 +141,25 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     selectedSubtitle && isImageSubtitleCodec(selectedSubtitle.codec) ? selectedSubtitle.stream_index : null
   const textSubtitleIndex =
     selectedSubtitle && isTextSubtitleCodec(selectedSubtitle.codec) ? selectedSubtitle.stream_index : null
-  const session = usePlaybackSession(itemID, fileID, burnInSubtitleIndex)
+  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null)
+  const audioOptions = useMemo(
+    () => activeFile?.streams.filter((stream) => stream.kind === 'audio') ?? [],
+    [activeFile],
+  )
+  const defaultAudio = useMemo(
+    () => audioOptions.find((stream) => stream.is_default) ?? audioOptions[0] ?? null,
+    [audioOptions],
+  )
+  const selectedAudio = useMemo(
+    () => audioOptions.find((stream) => stream.stream_index === selectedAudioIndex) ?? defaultAudio,
+    [audioOptions, defaultAudio, selectedAudioIndex],
+  )
+  // Browsers can't switch tracks on a plain <video src>, so a non-default pick
+  // is remapped server-side via an HLS session; the default track is omitted
+  // from the request and keeps direct play.
+  const sessionAudioIndex =
+    selectedAudio && selectedAudio.stream_index !== defaultAudio?.stream_index ? selectedAudio.stream_index : null
+  const session = usePlaybackSession(itemID, fileID, burnInSubtitleIndex, sessionAudioIndex)
   const { mutate: saveProgressMutate } = useSaveProgress(itemID)
 
   const [paused, setPaused] = useState(true)
@@ -330,6 +349,20 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       setSelectedSubtitleIndex(streamIndex)
     },
     [selectedSubtitle, subtitleOptions],
+  )
+
+  const selectAudio = useCallback(
+    (streamIndex: number) => {
+      const next = audioOptions.find((stream) => stream.stream_index === streamIndex) ?? defaultAudio
+      const nextSessionIndex =
+        next && next.stream_index !== defaultAudio?.stream_index ? next.stream_index : null
+      if (nextSessionIndex !== sessionAudioIndex) {
+        const video = videoRef.current
+        if (video && Number.isFinite(video.currentTime)) pendingSeek.current = video.currentTime
+      }
+      setSelectedAudioIndex(streamIndex)
+    },
+    [audioOptions, defaultAudio, sessionAudioIndex],
   )
 
   const cycleSubtitles = useCallback(() => {
@@ -887,8 +920,42 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
             {formatClock(currentTime)} / {formatClock(duration)}
           </span>
           <span className="grow" />
-          {/* Caption + speed: borderless, right-aligned, shown on every device
-              (seek is touch double-tap; there's no on-screen hints button). */}
+          {/* Audio + caption + speed: borderless, right-aligned, shown on every
+              device (seek is touch double-tap; there's no on-screen hints
+              button). Audio only appears when there's a track to switch to. */}
+          {audioOptions.length > 1 && (
+            <Menu
+              aria-label="Audio track"
+              onOpenChange={(open) => {
+                menuOpen.current = open
+                registerActivity()
+              }}
+              trigger={
+                <>
+                  <AudioLines aria-hidden className="size-4 text-secondary" strokeWidth={1.75} />
+                  {!coarsePointer && (
+                    <>
+                      <span className="max-w-24 truncate">
+                        {selectedAudio ? audioOptionLabel(selectedAudio) : 'Default'}
+                      </span>
+                      <ChevronDown aria-hidden className="size-4" strokeWidth={1.75} />
+                    </>
+                  )}
+                </>
+              }
+              triggerClassName="text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center gap-2 rounded-md px-3 text-sm"
+            >
+              {audioOptions.map((stream) => (
+                <MenuItem
+                  key={stream.stream_index}
+                  checked={selectedAudio?.stream_index === stream.stream_index}
+                  onSelect={() => selectAudio(stream.stream_index)}
+                >
+                  {audioOptionLabel(stream)}
+                </MenuItem>
+              ))}
+            </Menu>
+          )}
           {subtitleOptions.length > 0 && (
             <Menu
               aria-label="Subtitles"
@@ -1040,6 +1107,29 @@ function numeric(raw: string | null | undefined): number | null {
   if (!raw) return null
   const id = Number(raw)
   return Number.isInteger(id) && id > 0 ? id : null
+}
+
+function audioOptionLabel(stream: MediaStream): string {
+  const base = stream.title ?? stream.lang?.toUpperCase() ?? `Track ${stream.stream_index}`
+  const layout = channelLayoutLabel(stream.channels)
+  return layout ? `${base} · ${layout}` : base
+}
+
+function channelLayoutLabel(channels?: number): string | null {
+  switch (channels) {
+    case undefined:
+      return null
+    case 1:
+      return 'Mono'
+    case 2:
+      return 'Stereo'
+    case 6:
+      return '5.1'
+    case 8:
+      return '7.1'
+    default:
+      return `${channels}ch`
+  }
 }
 
 function subtitleOptionLabel(stream: MediaStream): string {

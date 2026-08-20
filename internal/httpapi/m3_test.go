@@ -153,6 +153,75 @@ printf '%s\n' \
 	}
 }
 
+func TestPlaySelectingAudioTrackForcesRemux(t *testing.T) {
+	srv, st := newTestServer(t)
+	toolsDir := t.TempDir()
+	ffprobe := filepath.Join(toolsDir, "ffprobe")
+	if err := os.WriteFile(ffprobe, []byte(`#!/bin/sh
+printf '%s\n' \
+  'pts_time=0.000000|dts_time=N/A|duration_time=0.040000|flags=K__' \
+  'pts_time=6.000000|dts_time=5.920000|duration_time=0.040000|flags=K__' \
+  'pts_time=11.960000|dts_time=11.880000|duration_time=0.040000|flags=___'
+`), 0o755); err != nil {
+		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	srv.playback = playback.NewManager(playback.Options{CacheDir: t.TempDir(), FFprobe: ffprobe})
+	ctx := context.Background()
+	item, file := seedProbedItem(t, ctx, st)
+	channels := 2
+	surround := 6
+	if err := st.ReplaceFileStreams(ctx, file.ID, []store.Stream{
+		{StreamIndex: 0, Kind: "video", Codec: "h264"},
+		{StreamIndex: 1, Kind: "audio", Codec: "aac", Channels: &channels, IsDefault: true},
+		{StreamIndex: 2, Kind: "audio", Codec: "aac", Channels: &surround},
+	}); err != nil {
+		t.Fatalf("streams: %v", err)
+	}
+
+	body := `{
+		"capabilities": {
+			"containers": ["mp4"],
+			"video_codecs": ["h264"],
+			"audio_codecs": ["aac"],
+			"max_height": 2160,
+			"native_hls": true
+		},
+		"audio_stream_index": 2
+	}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/items/"+strconv.FormatInt(item.ID, 10)+"/play", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("play status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var play playResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &play); err != nil {
+		t.Fatalf("decode play: %v", err)
+	}
+	if play.Mode != "hls" || play.Reason == nil || *play.Reason != playback.ReasonAudioTrackSelection || play.SessionID == nil {
+		t.Fatalf("play = %+v, want hls audio_track_selection", play)
+	}
+
+	// A stream index that is not an audio stream is a bad request.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/items/"+strconv.FormatInt(item.ID, 10)+"/play", strings.NewReader(`{
+		"capabilities": {
+			"containers": ["mp4"],
+			"video_codecs": ["h264"],
+			"audio_codecs": ["aac"],
+			"max_height": 2160,
+			"native_hls": true
+		},
+		"audio_stream_index": 0
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("non-audio index status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestPlayPatchAndProgressEndpoints(t *testing.T) {
 	srv, st := newTestServer(t)
 	ctx := context.Background()
