@@ -92,9 +92,11 @@ func Default() Config {
 }
 
 // Load reads, parses, and validates the config file at path. Directories the
-// server owns (data_dir, hls_cache.dir, logs) are created if missing. Library
+// server owns (data_dir, logs, thumbnails) are created if missing. Library
 // root paths are NOT required to exist: an absent volume is the offline
-// state, not a configuration error.
+// state, not a configuration error. The same applies to hls_cache.dir when
+// it lives on a removable volume: it is created lazily once the volume is
+// mounted.
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -121,6 +123,9 @@ func (c *Config) normalize() error {
 	if c.HLSCache.Dir, err = expandTilde(c.HLSCache.Dir); err != nil {
 		return err
 	}
+	if c.HLSCache.Dir != "" {
+		c.HLSCache.Dir = filepath.Clean(c.HLSCache.Dir)
+	}
 	for i := range c.Roots {
 		if c.Roots[i].Path, err = expandTilde(c.Roots[i].Path); err != nil {
 			return err
@@ -137,13 +142,13 @@ func (c *Config) Validate() error {
 	if c.DataDir == "" {
 		return fmt.Errorf("data_dir is required")
 	}
-	for _, dir := range []string{c.DataDir, c.HLSCache.Dir, c.LogDir(), c.ThumbsDir()} {
-		if dir == "" {
-			continue
-		}
+	for _, dir := range []string{c.DataDir, c.LogDir(), c.ThumbsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
+	}
+	if err := c.validateHLSCacheDir(); err != nil {
+		return err
 	}
 	seenName := map[string]bool{}
 	seenPath := map[string]bool{}
@@ -178,6 +183,61 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("debug.pprof_port %d out of range 1-65535", c.Debug.PprofPort)
 	}
 	return nil
+}
+
+// validateHLSCacheDir rejects a cache directory the library scanner would
+// index (HLS output includes init.mp4, a video extension) and creates it
+// unless its volume is unmounted, which is an offline state like any other.
+func (c *Config) validateHLSCacheDir() error {
+	dir := c.HLSCache.Dir
+	if dir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("hls_cache.dir must be absolute, got %q", dir)
+	}
+	for _, r := range c.Roots {
+		rel, err := filepath.Rel(r.Path, dir)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if rel == "." {
+			return fmt.Errorf("hls_cache.dir %q is library root %q itself; use a hidden subdirectory such as %s",
+				dir, r.Name, filepath.Join(r.Path, ".hls"))
+		}
+		if !hiddenRelPath(rel) {
+			return fmt.Errorf("hls_cache.dir %q is inside library root %q and would be scanned as media; use a hidden directory such as %s",
+				dir, r.Name, filepath.Join(r.Path, ".hls"))
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil && !volumeAbsent(dir) {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	return nil
+}
+
+func hiddenRelPath(rel string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// volumeAbsent reports whether path lives under a /Volumes mount point that
+// is not currently present, i.e. the removable disk is unplugged.
+func volumeAbsent(path string) bool {
+	const volumes = "/Volumes/"
+	if !strings.HasPrefix(path, volumes) {
+		return false
+	}
+	name, _, _ := strings.Cut(strings.TrimPrefix(path, volumes), "/")
+	if name == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(volumes, name))
+	return err != nil
 }
 
 // DBPath is the SQLite database file inside data_dir.

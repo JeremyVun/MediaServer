@@ -8,8 +8,14 @@ server:
 
 data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, logs
 
+# Transcode working files (HLS segments, keyframe indexes). Defaults to the
+# internal SSD. To keep it off the SSD, point it at a hidden directory on a
+# library volume, e.g. "/Volumes/Media/.hls": the leading dot keeps the
+# scanner out of it (a visible directory inside a root is rejected at boot).
+# If that volume is unplugged the server still starts; transcoded playback
+# resumes when it is mounted again. Direct play never touches this cache.
 hls_cache:
-  dir: "~/media-server/data/hls"       # move to a library volume if SSD is tight
+  dir: "~/media-server/data/hls"
   max_gb: 20
 
 # Library roots: directories whose contents form the one flat library.

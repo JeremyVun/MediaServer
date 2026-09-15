@@ -16,6 +16,7 @@ import type {
   ProgressUpdate,
   PurgeTrashResponse,
   RescanResponse,
+  TrashJobFileResponse,
 } from './types.ts'
 
 // Sized to what the home screen can actually show before the sentinel pulls
@@ -254,6 +255,19 @@ export function useRetryJob() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       void queryClient.invalidateQueries({ queryKey: ['health'] })
+    },
+  })
+}
+
+export function useTrashJobFile() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) =>
+      api<TrashJobFileResponse>(`/api/jobs/${id}/trash`, { method: 'POST' }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['health'] })
+      invalidateItemCaches(queryClient)
     },
   })
 }

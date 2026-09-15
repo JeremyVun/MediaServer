@@ -122,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jobs", s.handleListJobs)
 	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
 	mux.HandleFunc("POST /api/jobs/{id}/retry", s.handleRetryJob)
+	mux.HandleFunc("POST /api/jobs/{id}/trash", s.handleTrashJobFile)
 	mux.HandleFunc("POST /api/uploads", s.handleCreateUpload)
 	mux.HandleFunc("GET /api/uploads/{id}", s.handleGetUpload)
 	mux.HandleFunc("PUT /api/uploads/{id}", s.handlePutUploadChunk)

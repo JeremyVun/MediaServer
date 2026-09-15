@@ -115,6 +115,11 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		SubtitleStreamIndex: req.SubtitleStreamIndex,
 		AudioStreamIndex:    req.AudioStreamIndex,
 	})
+	if errors.Is(err, playbackpkg.ErrCacheUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, "hls_cache_unavailable", "transcode cache volume is not mounted")
+		s.log.Warn("start playback session", "file_id", file.ID, "error", err)
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "starting playback session failed")
 		s.log.Error("start playback session", "file_id", file.ID, "error", err)

@@ -83,6 +83,9 @@ func run() error {
 		return err
 	}
 
+	if !dirExists(cfg.HLSCache.Dir) {
+		logger.Warn("hls cache dir unavailable (volume not mounted); transcoded playback waits for it", "dir", cfg.HLSCache.Dir)
+	}
 	playbackManager := playback.NewManager(playback.Options{
 		CacheDir:        cfg.HLSCache.Dir,
 		MaxBytes:        int64(cfg.HLSCache.MaxGB * 1000 * 1000 * 1000),

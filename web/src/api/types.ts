@@ -173,6 +173,10 @@ export interface Job {
   error: string | null
 }
 
+export interface TrashJobFileResponse {
+  item_id: number
+}
+
 export interface PurgeTrashResponse {
   purged: number
   skipped: number

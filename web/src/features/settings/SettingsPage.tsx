@@ -28,6 +28,7 @@ import {
   useRestoreItem,
   useRetryJob,
   useRoots,
+  useTrashJobFile,
 } from '../../api/queries.ts'
 import type { ItemSummary, Job, RootInfo } from '../../api/types.ts'
 import { formatBytes, formatClock } from '../../lib/format.ts'
@@ -253,6 +254,7 @@ function TrashSection() {
 function JobsSection() {
   const jobs = useJobs('failed')
   const retry = useRetryJob()
+  const trash = useTrashJobFile()
   const { toast } = useToast()
   const runOrToast = makeRunOrToast(toast)
   const failed = jobs.data ?? []
@@ -260,6 +262,11 @@ function JobsSection() {
   const onRetry = async (job: Job) => {
     const ok = await runOrToast(() => retry.mutateAsync(job.id), "Couldn't retry job")
     if (ok) toast({ message: `${job.type} retry queued` })
+  }
+
+  const onTrashFile = async (job: Job) => {
+    const ok = await runOrToast(() => trash.mutateAsync(job.id), "Couldn't remove file")
+    if (ok) toast({ message: 'File moved to trash' })
   }
 
   return (
@@ -282,14 +289,23 @@ function JobsSection() {
               </div>
               <p className="line-clamp-2 text-sm text-secondary">{job.error ?? job.payload}</p>
             </div>
-            <Button
-              className="self-start"
-              pending={retry.isPending && retry.variables === job.id}
-              onClick={() => void onRetry(job)}
-            >
-              <RefreshCw aria-hidden className="size-4" strokeWidth={1.75} />
-              Retry
-            </Button>
+            <div className="flex gap-2 self-start">
+              <Button
+                pending={retry.isPending && retry.variables === job.id}
+                onClick={() => void onRetry(job)}
+              >
+                <RefreshCw aria-hidden className="size-4" strokeWidth={1.75} />
+                Retry
+              </Button>
+              <Button
+                variant="danger"
+                pending={trash.isPending && trash.variables === job.id}
+                onClick={() => void onTrashFile(job)}
+              >
+                <Trash2 aria-hidden className="size-4" strokeWidth={1.75} />
+                Remove file
+              </Button>
+            </div>
           </div>
         </Card>
       ))}

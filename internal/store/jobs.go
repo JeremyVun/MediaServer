@@ -33,40 +33,61 @@ func (s *Store) QueueDepth(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// EnqueueJob inserts a job unless an identical one is already queued, in
-// which case the existing job is returned. This keeps rescan storms and
-// crash-recovery re-walks from piling up duplicate probe/reconcile jobs
-// (payloads are canonical JSON from jobs.Manager, so string equality is
-// exact). A job that is already *running* does not suppress the enqueue —
-// it may be operating on stale state, so the new job must still run after
-// it.
+// EnqueueJob inserts a job unless one with the same type and payload is
+// already queued or failed, in which case that row is reused: a queued
+// duplicate is returned as-is (its run_at pulled forward when the new
+// request is due sooner), and a failed one is revived with a fresh attempt
+// budget. Payloads are canonical JSON from jobs.Manager, so string equality
+// is exact. Reviving instead of inserting keeps a repeatedly failing file
+// to one row, so rescan storms and watcher bursts cannot pile up failures.
+// A job that is already *running* does not suppress the enqueue — it may
+// be operating on stale state, so the new job must still run after it.
 func (s *Store) EnqueueJob(ctx context.Context, typ, payload string) (Job, error) {
 	return s.EnqueueJobAt(ctx, typ, payload, time.Now().UTC())
 }
 
 func (s *Store) EnqueueJobAt(ctx context.Context, typ, payload string, runAt time.Time) (Job, error) {
-	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO jobs (type, payload, run_at)
-		SELECT ?, ?, ?
-		WHERE NOT EXISTS (
-			SELECT 1 FROM jobs WHERE type = ? AND payload = ? AND status = 'queued'
-		)`, typ, payload, FormatTime(runAt), typ, payload)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, err
 	}
-	if n, err := res.RowsAffected(); err != nil {
+	defer tx.Rollback()
+
+	at := FormatTime(runAt)
+	job, err := scanJob(tx.QueryRowContext(ctx, `
+		UPDATE jobs
+		SET status = 'queued',
+		    attempts = CASE WHEN status = 'failed' THEN 0 ELSE attempts END,
+		    run_at = CASE WHEN status = 'failed' OR run_at > ? THEN ? ELSE run_at END,
+		    started_at = NULL,
+		    finished_at = NULL,
+		    error = CASE WHEN status = 'failed' THEN NULL ELSE error END
+		WHERE id = (
+			SELECT id FROM jobs
+			WHERE type = ? AND payload = ? AND status IN ('queued', 'failed')
+			ORDER BY status = 'queued' DESC, id DESC
+			LIMIT 1
+		)
+		RETURNING `+jobCols, at, at, typ, payload))
+	if err == nil {
+		return job, tx.Commit()
+	}
+	if !errors.Is(err, ErrNotFound) {
 		return Job{}, err
-	} else if n == 0 {
-		return scanJob(s.db.QueryRowContext(ctx, `
-			SELECT `+jobCols+` FROM jobs
-			WHERE type = ? AND payload = ? AND status = 'queued'
-			ORDER BY id LIMIT 1`, typ, payload))
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO jobs (type, payload, run_at) VALUES (?, ?, ?)`, typ, payload, at)
+	if err != nil {
+		return Job{}, err
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
 		return Job{}, err
 	}
-	return s.GetJob(ctx, id)
+	job, err = scanJob(tx.QueryRowContext(ctx, `SELECT `+jobCols+` FROM jobs WHERE id = ?`, id))
+	if err != nil {
+		return Job{}, err
+	}
+	return job, tx.Commit()
 }
 
 func (s *Store) GetJob(ctx context.Context, id int64) (Job, error) {
@@ -126,7 +147,7 @@ func (s *Store) RescheduleJob(ctx context.Context, id int64, attempts int, runAt
 func (s *Store) RetryJob(ctx context.Context, id int64) (Job, error) {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE jobs
-		SET status = 'queued', run_at = datetime('now'), started_at = NULL, finished_at = NULL, error = NULL
+		SET status = 'queued', attempts = 0, run_at = datetime('now'), started_at = NULL, finished_at = NULL, error = NULL
 		WHERE id = ? AND status = 'failed'`, id)
 	if err != nil {
 		return Job{}, err
@@ -211,4 +232,14 @@ func scanJob(row rowScanner) (Job, error) {
 		job.Error = &message.String
 	}
 	return job, nil
+}
+
+// DeleteJob removes a job row outright. Used when the operator resolves a
+// failed job by removing its file: there is nothing left to retry.
+func (s *Store) DeleteJob(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM jobs WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	return requireRow(res)
 }

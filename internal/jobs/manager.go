@@ -28,6 +28,14 @@ const (
 	TypeCleanup   = "cleanup"
 
 	maxAttempts = 3
+
+	// A media file whose mtime is this recent is treated as still being
+	// written when ffprobe/ffmpeg reject it: torrent clients preallocate the
+	// full file and fill it piecewise, so it looks complete long before it
+	// is. Such failures wait stillWritingRetry and do not spend an attempt;
+	// once writes stop, the next failure is final.
+	stillWritingWindow = time.Minute
+	stillWritingRetry  = time.Minute
 )
 
 type CachePruner interface {
@@ -241,8 +249,17 @@ func (m *Manager) runJob(ctx context.Context, job store.Job) {
 		return
 	}
 
-	attempts := job.Attempts + 1
 	message := truncateError(err.Error())
+	var later retryLaterError
+	if errors.As(err, &later) {
+		runAt := time.Now().Add(later.after)
+		if rescheduleErr := m.store.RescheduleJob(ctx, job.ID, job.Attempts, runAt, message); rescheduleErr != nil {
+			m.log.Error("reschedule job", "job_id", job.ID, "error", rescheduleErr)
+		}
+		return
+	}
+
+	attempts := job.Attempts + 1
 	var permanent permanentError
 	if errors.As(err, &permanent) || attempts >= maxAttempts {
 		if markErr := m.store.MarkJobFailed(ctx, job.ID, attempts, message); markErr != nil {
@@ -424,6 +441,9 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return err // transient (busy disk): retry with backoff
 		}
+		if stillWriting(info) {
+			return RetryLater(fmt.Errorf("%s is still being written: %w", relPath, err), stillWritingRetry)
+		}
 		return Permanent(err) // corrupt/unreadable media: retrying won't help
 	}
 	fingerprint, err := library.Fingerprint(mediaPath)
@@ -545,6 +565,9 @@ func (m *Manager) handleThumbnail(ctx context.Context, fileID int64) error {
 	if err := m.thumbs.Generate(ctx, file.ID, mediaPath, duration); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return err // transient (busy disk): retry with backoff
+		}
+		if info, statErr := os.Stat(mediaPath); statErr == nil && stillWriting(info) {
+			return RetryLater(fmt.Errorf("%s is still being written: %w", file.RelPath, err), stillWritingRetry)
 		}
 		return Permanent(err)
 	}
@@ -751,6 +774,24 @@ func (e permanentError) Unwrap() error { return e.err }
 
 func Permanent(err error) error {
 	return permanentError{err: err}
+}
+
+type retryLaterError struct {
+	err   error
+	after time.Duration
+}
+
+func (e retryLaterError) Error() string { return e.err.Error() }
+func (e retryLaterError) Unwrap() error { return e.err }
+
+// RetryLater reschedules the job after the given delay without consuming an
+// attempt: the failure is expected to clear on its own.
+func RetryLater(err error, after time.Duration) error {
+	return retryLaterError{err: err, after: after}
+}
+
+func stillWriting(info fs.FileInfo) bool {
+	return time.Since(info.ModTime()) < stillWritingWindow
 }
 
 func backoff(attempts int) time.Duration {

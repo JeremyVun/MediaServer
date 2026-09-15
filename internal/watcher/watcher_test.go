@@ -403,3 +403,70 @@ func waitEvent(t *testing.T, ch <-chan events.Event, typ string) events.Event {
 		}
 	}
 }
+
+func TestWatcherWaitsForPreallocatedFileToStopChanging(t *testing.T) {
+	st, closeDB := newWatcherStore(t)
+	defer closeDB()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rootPath := t.TempDir()
+	root, err := st.UpsertRoot(ctx, "A", rootPath)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	mediaPath := filepath.Join(rootPath, "incoming", "movie.mkv")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Preallocated download: the size never changes, only the mtime does.
+	if err := os.WriteFile(mediaPath, make([]byte, 1<<16), 0o644); err != nil {
+		t.Fatalf("write media: %v", err)
+	}
+
+	jobs := newFakeJobs()
+	streams := newFakeStreams()
+	manager := NewManager(Options{
+		Store:            st,
+		Jobs:             jobs,
+		Log:              slog.Default(),
+		Debounce:         5 * time.Millisecond,
+		QuiesceInterval:  5 * time.Millisecond,
+		QuiesceStableFor: 40 * time.Millisecond,
+		StormBackstop:    time.Hour,
+		StreamFactory:    streams.factory,
+	})
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	jobs.waitReconcile(t, root.ID)
+
+	// Keep "writing" for a while: touch the mtime and fire an event each
+	// time, the way a torrent client filling pieces looks to FSEvents.
+	writing := time.Now()
+	for i := 0; i < 20; i++ {
+		stamp := time.Now().Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(mediaPath, stamp, stamp); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+		streams.send(t, rootPath, streamEvent{Path: mediaPath})
+		select {
+		case probe := <-jobs.probes:
+			t.Fatalf("probe %+v enqueued while the file was still being written", probe)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if time.Since(writing) < 40*time.Millisecond {
+		t.Fatal("test wrote for less than the quiesce window; tighten the loop")
+	}
+
+	probe := jobs.waitProbe(t)
+	if probe.relPath != "incoming/movie.mkv" {
+		t.Fatalf("probe = %+v", probe)
+	}
+	select {
+	case extra := <-jobs.probes:
+		t.Fatalf("second probe %+v enqueued for one settled file", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

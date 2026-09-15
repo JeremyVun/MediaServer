@@ -283,9 +283,10 @@ func (m *Manager) watchRoot(ctx context.Context, root store.Root) {
 	}
 
 	rw := &rootWatcher{
-		manager: m,
-		root:    root,
-		timers:  make(map[string]*time.Timer),
+		manager:   m,
+		root:      root,
+		timers:    make(map[string]*time.Timer),
+		quiescing: make(map[string]bool),
 	}
 	defer rw.stop()
 
@@ -396,9 +397,10 @@ type rootWatcher struct {
 	manager *Manager
 	root    store.Root
 
-	mu       sync.Mutex
-	timers   map[string]*time.Timer
-	backstop *time.Timer
+	mu        sync.Mutex
+	timers    map[string]*time.Timer
+	quiescing map[string]bool
+	backstop  *time.Timer
 }
 
 func (rw *rootWatcher) schedule(ctx context.Context, path string) {
@@ -482,12 +484,31 @@ func (rw *rootWatcher) handlePath(ctx context.Context, path string) {
 	if !info.Mode().IsRegular() || !isVideoPath(rel) {
 		return
 	}
+	// One waiter per path: it re-stats until the file settles, so further
+	// events for a file still being written add nothing but a duplicate
+	// probe. A torrent client writing into a preallocated file fires events
+	// for its whole download; without this every one of them became a probe.
+	rw.mu.Lock()
+	busy := rw.quiescing[path]
+	if !busy {
+		rw.quiescing[path] = true
+	}
+	rw.mu.Unlock()
+	if busy {
+		return
+	}
+	defer func() {
+		rw.mu.Lock()
+		delete(rw.quiescing, path)
+		rw.mu.Unlock()
+	}()
 	rw.waitForQuiescence(ctx, rel, path)
 }
 
 func (rw *rootWatcher) waitForQuiescence(ctx context.Context, rel, path string) {
 	started := time.Now()
 	lastSize := int64(-1)
+	var lastMtime time.Time
 	stableSince := time.Now()
 	ticker := time.NewTicker(rw.manager.quiesceInterval)
 	defer ticker.Stop()
@@ -506,8 +527,11 @@ func (rw *rootWatcher) waitForQuiescence(ctx context.Context, rel, path string) 
 			return
 		}
 		now := time.Now()
-		if info.Size() != lastSize {
+		// Size alone misses preallocated downloads (the file is full-sized from
+		// the first byte); mtime keeps moving while anything is still writing.
+		if info.Size() != lastSize || !info.ModTime().Equal(lastMtime) {
 			lastSize = info.Size()
+			lastMtime = info.ModTime()
 			stableSince = now
 		}
 		if now.Sub(stableSince) >= rw.manager.quiesceStableFor && canOpen(path) {

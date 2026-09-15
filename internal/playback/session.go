@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("playback session not found")
-	ErrTimeout  = errors.New("playback segment timed out")
+	ErrNotFound         = errors.New("playback session not found")
+	ErrTimeout          = errors.New("playback segment timed out")
+	ErrCacheUnavailable = errors.New("hls cache dir unavailable")
 )
 
 type Manager struct {
@@ -145,13 +146,13 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 		return Session{}, fmt.Errorf("hls cache dir is required")
 	}
 	if err := os.MkdirAll(m.cacheDir, 0o755); err != nil {
-		return Session{}, fmt.Errorf("create hls cache: %w", err)
+		return Session{}, fmt.Errorf("%w: %v", ErrCacheUnavailable, err)
 	}
 	hash := ProfileHash(req.File, req.Capabilities, req.Decision, req.SubtitleStreamIndex, req.AudioStreamIndex)
 	key := strconv.FormatInt(req.File.ID, 10) + "/" + hash
 	dir := filepath.Join(m.cacheDir, strconv.FormatInt(req.File.ID, 10), hash)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Session{}, fmt.Errorf("create hls session cache: %w", err)
+		return Session{}, fmt.Errorf("%w: %v", ErrCacheUnavailable, err)
 	}
 	_ = m.PruneCache(ctx)
 

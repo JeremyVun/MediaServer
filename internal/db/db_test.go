@@ -90,3 +90,59 @@ func TestForeignKeysEnforced(t *testing.T) {
 		t.Fatal("insert with dangling foreign keys succeeded; PRAGMA foreign_keys is off")
 	}
 }
+
+func TestMigration0005CollapsesFailedJobs(t *testing.T) {
+	sqldb, err := Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer sqldb.Close()
+	if err := Migrate(sqldb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// The jobs schema is unchanged since 0001, so seed rows and rewind the
+	// version to replay 0005 over them.
+	rows := []struct {
+		id     int
+		status string
+		load   string
+	}{
+		{1, "failed", "a"}, {2, "failed", "a"}, {3, "done", "a"}, {4, "failed", "a"},
+		{5, "failed", "b"}, {6, "failed", "b"},
+		{7, "failed", "c"}, {8, "done", "c"},
+	}
+	for _, r := range rows {
+		if _, err := sqldb.Exec(`INSERT INTO jobs (id, type, payload, status) VALUES (?, 'probe', ?, ?)`, r.id, r.load, r.status); err != nil {
+			t.Fatalf("seed %d: %v", r.id, err)
+		}
+	}
+	if _, err := sqldb.Exec(`PRAGMA user_version = 4`); err != nil {
+		t.Fatalf("rewind: %v", err)
+	}
+	if err := Migrate(sqldb); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	var ids []int
+	res, err := sqldb.Query(`SELECT id FROM jobs WHERE status = 'failed' ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer res.Close()
+	for res.Next() {
+		var id int
+		if err := res.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	// a: 1,2 superseded by done 3; 4 failed after the success stays.
+	// b: 5 superseded by newer failed 6. c: 7 superseded by done 8.
+	if want := []int{4, 6}; len(ids) != len(want) || ids[0] != want[0] || ids[1] != want[1] {
+		t.Fatalf("remaining failed ids = %v, want %v", ids, want)
+	}
+	var done int
+	if err := sqldb.QueryRow(`SELECT COUNT(*) FROM jobs WHERE status = 'done'`).Scan(&done); err != nil || done != 2 {
+		t.Fatalf("done rows = %d err=%v, want 2 untouched", done, err)
+	}
+}

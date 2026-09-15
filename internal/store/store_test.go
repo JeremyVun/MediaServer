@@ -774,3 +774,53 @@ func TestGetItemSummary(t *testing.T) {
 		t.Fatalf("missing item err = %v", err)
 	}
 }
+
+func TestEnqueueJobRevivesFailedAndPullsQueuedForward(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	payload := `{"root_id":1,"rel_path":"downloading.mkv"}`
+
+	first, err := s.EnqueueJob(ctx, "probe", payload)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	claimed, err := s.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := s.MarkJobFailed(ctx, claimed.ID, 3, "still zeros"); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+
+	revived, err := s.EnqueueJob(ctx, "probe", payload)
+	if err != nil {
+		t.Fatalf("re-enqueue: %v", err)
+	}
+	if revived.ID != first.ID || revived.Status != "queued" || revived.Attempts != 0 || revived.Error != nil {
+		t.Fatalf("revived = %+v, want same id queued with a fresh attempt budget", revived)
+	}
+	all, err := s.ListJobs(ctx, store.ListJobsOpts{})
+	if err != nil || len(all) != 1 {
+		t.Fatalf("jobs = %+v err=%v, want the single revived row", all, err)
+	}
+
+	// A queued job waiting out a backoff is pulled forward when the same
+	// work is requested now: the watcher's "file settled" enqueue must not
+	// sit behind a minutes-long retry delay.
+	if err := s.RescheduleJob(ctx, first.ID, 0, time.Now().Add(time.Hour), "still being written"); err != nil {
+		t.Fatalf("reschedule: %v", err)
+	}
+	if _, err := s.ClaimNextJob(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("claim before due err = %v, want ErrNotFound", err)
+	}
+	pulled, err := s.EnqueueJob(ctx, "probe", payload)
+	if err != nil {
+		t.Fatalf("enqueue again: %v", err)
+	}
+	if pulled.ID != first.ID {
+		t.Fatalf("pulled id = %d, want %d", pulled.ID, first.ID)
+	}
+	if _, err := s.ClaimNextJob(ctx); err != nil {
+		t.Fatalf("claim after pull-forward: %v", err)
+	}
+}

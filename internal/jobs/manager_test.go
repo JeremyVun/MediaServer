@@ -165,8 +165,15 @@ func TestCorruptProbeMarksJobFailed(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 	rootPath := t.TempDir()
-	if err := os.WriteFile(filepath.Join(rootPath, "bad.mp4"), []byte("bad"), 0o644); err != nil {
+	badPath := filepath.Join(rootPath, "bad.mp4")
+	if err := os.WriteFile(badPath, []byte("bad"), 0o644); err != nil {
 		t.Fatalf("write media: %v", err)
+	}
+	// Settled long ago: nobody is still writing this file, so the rejection
+	// is final rather than a still-downloading retry.
+	settled := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(badPath, settled, settled); err != nil {
+		t.Fatalf("chtimes: %v", err)
 	}
 	root, _ := st.UpsertRoot(ctx, "A", rootPath)
 	ffprobe := testScript(t, "ffprobe", `#!/bin/sh
@@ -466,4 +473,67 @@ func testScript(t *testing.T, name, body string) string {
 		t.Fatalf("write script: %v", err)
 	}
 	return path
+}
+
+func TestProbeOfFileStillBeingWrittenRetriesWithoutSpendingAttempt(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	rootPath := t.TempDir()
+	mediaPath := filepath.Join(rootPath, "downloading.mkv")
+	// A preallocated torrent file: full size, zero-filled, freshly written.
+	if err := os.WriteFile(mediaPath, make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("write media: %v", err)
+	}
+	root, _ := st.UpsertRoot(ctx, "A", rootPath)
+	ffprobe := testScript(t, "ffprobe", `#!/bin/sh
+echo 'EBML header parsing failed' >&2
+exit 1
+`)
+	mgr := NewManager(Options{Store: st, FFprobe: ffprobe, FFmpeg: ffprobe, ThumbsDir: t.TempDir()})
+	job, err := mgr.enqueueProbe(ctx, root.ID, "downloading.mkv")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	claimed, err := st.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	mgr.runJob(ctx, claimed)
+
+	got, err := st.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if got.Status != "queued" || got.Attempts != 0 || got.Error == nil || !strings.Contains(*got.Error, "still being written") {
+		t.Fatalf("job after mid-download probe = %+v, want queued with attempts 0", got)
+	}
+	runAt, err := store.ParseTime(got.RunAt)
+	if err != nil {
+		t.Fatalf("parse run_at: %v", err)
+	}
+	if runAt.Before(time.Now().Add(30 * time.Second)) {
+		t.Fatalf("run_at = %s, want at least half the retry delay in the future", got.RunAt)
+	}
+
+	// Writes stopped a while ago and ffprobe still rejects it: now it is a
+	// genuinely bad file and the failure is final.
+	old := time.Now().Add(-2 * stillWritingWindow)
+	if err := os.Chtimes(mediaPath, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	if err := st.RescheduleJob(ctx, job.ID, 0, time.Now().Add(-time.Second), ""); err != nil {
+		t.Fatalf("make due: %v", err)
+	}
+	claimed, err = st.ClaimNextJob(ctx)
+	if err != nil {
+		t.Fatalf("claim again: %v", err)
+	}
+	mgr.runJob(ctx, claimed)
+	got, err = st.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if got.Status != "failed" || got.Attempts != 1 {
+		t.Fatalf("job after settled probe = %+v, want failed", got)
+	}
 }

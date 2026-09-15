@@ -99,3 +99,60 @@ func TestTildeExpansion(t *testing.T) {
 		t.Errorf("non-tilde path mangled: %q", got)
 	}
 }
+
+func TestHLSCacheDirInsideRootMustBeHidden(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "Media")
+	cases := []struct {
+		name, hls, wantErr string
+	}{
+		{"visible subdir", filepath.Join(root, "hls"), "would be scanned as media"},
+		{"root itself", root, "is library root"},
+		{"hidden subdir", filepath.Join(root, ".hls"), ""},
+		{"nested under hidden", filepath.Join(root, ".cache", "hls"), ""},
+		{"outside root", filepath.Join(dir, "hls"), ""},
+		{"relative", "relative/hls", "must be absolute"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, `
+data_dir: `+dir+`/data
+hls_cache:
+  dir: "`+tc.hls+`"
+library_roots:
+  - name: Media
+    path: `+root+`
+`))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if info, statErr := os.Stat(cfg.HLSCache.Dir); statErr != nil || !info.IsDir() {
+					t.Fatalf("hls dir not created: %v", statErr)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("got %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestHLSCacheDirOnAbsentVolumeIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(writeConfig(t, `
+data_dir: `+dir+`/data
+hls_cache:
+  dir: /Volumes/DoesNotExistYet/.hls
+library_roots:
+  - name: Media
+    path: /Volumes/DoesNotExistYet
+`))
+	if err != nil {
+		t.Fatalf("unplugged cache volume must be an offline state, not a boot failure: %v", err)
+	}
+	if cfg.HLSCache.Dir != "/Volumes/DoesNotExistYet/.hls" {
+		t.Fatalf("hls dir = %q", cfg.HLSCache.Dir)
+	}
+}
