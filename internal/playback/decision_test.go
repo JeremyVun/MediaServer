@@ -1,6 +1,9 @@
 package playback
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestDecideMatrix(t *testing.T) {
 	channels := 2
@@ -174,4 +177,115 @@ func TestProfileHashVariesWithAudioSelection(t *testing.T) {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func TestDecideQuality(t *testing.T) {
+	file := MediaFile{ID: 1, Container: "mov", DurationS: 600, Width: 1920, Height: 1080}
+	caps := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 2160}
+	streams := []Stream{
+		{StreamIndex: 0, Kind: "video", Codec: "h264"},
+		{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+	}
+
+	original := Decide(file, streams, caps, nil, nil)
+	for _, quality := range []string{"", QualityOriginal} {
+		got, err := DecideQuality(quality, file, streams, caps, nil, nil)
+		if err != nil {
+			t.Fatalf("DecideQuality(%q): %v", quality, err)
+		}
+		if got.Quality != QualityOriginal || got.Mode != original.Mode || got.Tier != original.Tier || len(got.Rungs) != 0 {
+			t.Fatalf("DecideQuality(%q) = %+v, want today's %+v", quality, got, original)
+		}
+	}
+
+	auto, err := DecideQuality(QualityAuto, file, streams, caps, nil, nil)
+	if err != nil {
+		t.Fatalf("DecideQuality(auto): %v", err)
+	}
+	if auto.Mode != ModeHLS || auto.Tier != TierLadder || auto.Reason != ReasonQuality || len(auto.Rungs) != 4 {
+		t.Fatalf("DecideQuality(auto) = %+v", auto)
+	}
+
+	fixed, err := DecideQuality("720p", file, streams, caps, nil, nil)
+	if err != nil {
+		t.Fatalf("DecideQuality(720p): %v", err)
+	}
+	if fixed.Quality != "720p" || len(fixed.Rungs) != 1 || fixed.Rungs[0].ID != "720p" {
+		t.Fatalf("DecideQuality(720p) = %+v", fixed)
+	}
+
+	// A picked audio track and an image subtitle still reach the ladder's
+	// single ffmpeg, which overlays before the split.
+	withPicks := append(append([]Stream{}, streams...),
+		Stream{StreamIndex: 2, Kind: "audio", Codec: "aac"},
+		Stream{StreamIndex: 3, Kind: "subtitle", Codec: "hdmv_pgs_subtitle"})
+	picked, err := DecideQuality(QualityAuto, file, withPicks, caps, intPtr(3), intPtr(2))
+	if err != nil {
+		t.Fatalf("DecideQuality(auto, picks): %v", err)
+	}
+	if picked.BurnIn == nil || picked.BurnIn.StreamIndex != 3 || picked.AudioPick == nil || picked.AudioPick.StreamIndex != 2 {
+		t.Fatalf("DecideQuality(auto, picks) = %+v", picked)
+	}
+
+	// A file with nothing to offer resolves every quality to original.
+	audioOnly := MediaFile{ID: 2, Container: "mov", DurationS: 600}
+	silent, err := DecideQuality(QualityAuto, audioOnly, []Stream{{StreamIndex: 0, Kind: "audio", Codec: "aac"}}, caps, nil, nil)
+	if err != nil {
+		t.Fatalf("DecideQuality(auto, audio only): %v", err)
+	}
+	if silent.Quality != QualityOriginal || silent.Tier == TierLadder {
+		t.Fatalf("DecideQuality(auto, audio only) = %+v", silent)
+	}
+
+	if _, err := DecideQuality("1440p", file, streams, caps, nil, nil); !errors.Is(err, ErrUnknownQuality) {
+		t.Fatalf("DecideQuality(1440p) error = %v, want ErrUnknownQuality", err)
+	}
+}
+
+// Ladder caching must not disturb what is already on disk: these hashes are the
+// values main produced before the ladder existed.
+func TestProfileHashUnchangedForExistingTiers(t *testing.T) {
+	file := MediaFile{ID: 42, Container: "matroska", DurationS: 1234.5, Width: 1920, Height: 1080, Fingerprint: "abc123"}
+	caps := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 1080, NativeHLS: true}
+
+	full := Decision{Mode: ModeHLS, Reason: ReasonVideoCodec, Tier: TierFullTranscode}
+	if got := ProfileHash(file, caps, full, nil, nil); got != "70a4bbe24c199bb0" {
+		t.Fatalf("full transcode hash = %q, want 70a4bbe24c199bb0", got)
+	}
+	remux := Decision{Mode: ModeHLS, Reason: ReasonContainerUnsupported, Tier: TierRemux}
+	if got := ProfileHash(file, caps, remux, nil, intPtr(3)); got != "f8323a6a05127fb3" {
+		t.Fatalf("remux hash = %q, want f8323a6a05127fb3", got)
+	}
+}
+
+// Ladders size themselves, so devices differing only in max_height share one
+// cache entry — but a different ladder must not.
+func TestProfileHashIgnoresMaxHeightForLadders(t *testing.T) {
+	file := MediaFile{ID: 42, Container: "matroska", DurationS: 1234.5, Width: 1920, Height: 1080}
+	phone := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 844}
+	tablet := phone
+	tablet.MaxHeight = 2160
+	streams := []Stream{{StreamIndex: 0, Kind: "video", Codec: "h264"}, {StreamIndex: 1, Kind: "audio", Codec: "aac"}}
+
+	auto, err := DecideQuality(QualityAuto, file, streams, phone, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ProfileHash(file, phone, auto, nil, nil)
+	if other := ProfileHash(file, tablet, auto, nil, nil); other != base {
+		t.Fatalf("ladder hash varies with max_height: %q vs %q", base, other)
+	}
+
+	fixed, err := DecideQuality("480p", file, streams, phone, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ProfileHash(file, phone, fixed, nil, nil); got == base {
+		t.Fatal("a one-rung ladder hashes the same as the full ladder")
+	}
+
+	full := Decide(file, streams, phone, nil, nil)
+	if got := ProfileHash(file, phone, full, nil, nil); got == base {
+		t.Fatal("ladder and full transcode share a profile hash")
+	}
 }

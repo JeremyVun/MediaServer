@@ -375,3 +375,177 @@ func TestManagerServesGeneratedHLSSegment(t *testing.T) {
 		t.Fatalf("segment status=%d len=%d", rec.Code, rec.Body.Len())
 	}
 }
+
+func ladderStartRequest(file MediaFile, source string, quality string) StartRequest {
+	streams := []Stream{
+		{StreamIndex: 0, Kind: "video", Codec: "h264"},
+		{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+	}
+	caps := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 1080}
+	decision, err := DecideQuality(quality, file, streams, caps, nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	return StartRequest{File: file, SourcePath: source, Streams: streams, Capabilities: caps, Decision: decision}
+}
+
+func TestManagerLadderPlaylistsAndRungRoutes(t *testing.T) {
+	mgr := NewManager(Options{CacheDir: t.TempDir(), SegmentDuration: 4 * time.Second})
+	ctx := context.Background()
+	session, err := mgr.StartSession(ctx, ladderStartRequest(
+		MediaFile{ID: 11, Container: "matroska", DurationS: 9, Width: 1920, Height: 1080}, "/media/movie.mkv", QualityAuto))
+	if err != nil {
+		t.Fatalf("start ladder session: %v", err)
+	}
+	t.Cleanup(func() { mgr.EndSession(session.ID) })
+
+	master, err := mgr.Playlist(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("master playlist: %v", err)
+	}
+	for _, want := range []string{"#EXT-X-INDEPENDENT-SEGMENTS", "720p/stream.m3u8", "1080p/stream.m3u8", "360p/stream.m3u8"} {
+		if !strings.Contains(master, want) {
+			t.Fatalf("master playlist missing %q:\n%s", want, master)
+		}
+	}
+	if strings.Contains(master, "#EXTINF") {
+		t.Fatalf("master playlist carries segments:\n%s", master)
+	}
+
+	rung, err := mgr.RungPlaylist(ctx, session.ID, "480p")
+	if err != nil {
+		t.Fatalf("rung playlist: %v", err)
+	}
+	for _, want := range []string{"#EXT-X-MAP:URI=\"init.mp4\"", "#EXT-X-TARGETDURATION:4", "seg-00000.m4s", "#EXT-X-ENDLIST"} {
+		if !strings.Contains(rung, want) {
+			t.Fatalf("rung playlist missing %q:\n%s", want, rung)
+		}
+	}
+
+	if _, err := mgr.RungPlaylist(ctx, session.ID, "1440p"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown rung playlist error = %v, want ErrNotFound", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", session.URL, nil)
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "1440p", "seg-00000.m4s"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown rung segment error = %v, want ErrNotFound", err)
+	}
+	if err := mgr.ServeSegment(rec, req, session.ID, "seg-00000.m4s"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("flat segment on a ladder error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestManagerRungRoutesRejectNonLadderSessions(t *testing.T) {
+	mgr := NewManager(Options{CacheDir: t.TempDir(), SegmentDuration: 4 * time.Second})
+	ctx := context.Background()
+	session, err := mgr.StartSession(ctx, StartRequest{
+		File:     MediaFile{ID: 12, Container: "matroska", DurationS: 9},
+		Decision: Decision{Mode: ModeHLS, Reason: ReasonVideoCodec, Tier: TierFullTranscode},
+	})
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	t.Cleanup(func() { mgr.EndSession(session.ID) })
+
+	if _, err := mgr.RungPlaylist(ctx, session.ID, "720p"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rung playlist on a flat session error = %v, want ErrNotFound", err)
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", session.URL, nil)
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "720p", "seg-00000.m4s"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("rung segment on a flat session error = %v, want ErrNotFound", err)
+	}
+}
+
+// One ffmpeg writes every rung, so both rungs must have their own init.mp4 and
+// segment 0 on the shared 4 s grid.
+func TestManagerServesLadderRungSegments(t *testing.T) {
+	ffmpeg := ffmpegWithVideoToolbox(t)
+	tmp := t.TempDir()
+	source := filepath.Join(tmp, "fixture.mp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffmpeg,
+		"-hide_banner", "-nostdin", "-y", "-v", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=800x450:rate=10",
+		"-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000",
+		"-t", "8",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+		"-c:a", "aac",
+		source,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg fixture generation failed: %v: %s", err, out)
+	}
+
+	mgr := NewManager(Options{
+		CacheDir:     filepath.Join(tmp, "hls"),
+		FFmpeg:       ffmpeg,
+		SegmentWait:  45 * time.Second,
+		PollInterval: 50 * time.Millisecond,
+	})
+	session, err := mgr.StartSession(context.Background(), ladderStartRequest(
+		MediaFile{ID: 13, Container: "mov", DurationS: 8, Width: 800, Height: 450}, source, QualityAuto))
+	if err != nil {
+		t.Fatalf("start ladder session: %v", err)
+	}
+	t.Cleanup(func() { mgr.EndSession(session.ID) })
+
+	w, err := mgr.workerForSession(session.ID)
+	if err != nil {
+		t.Fatalf("worker: %v", err)
+	}
+	if got := len(w.req.Decision.Rungs); got != 2 {
+		t.Fatalf("ladder has %d rungs, want 2", got)
+	}
+
+	for _, rung := range []string{"480p", "360p"} {
+		for _, name := range []string{"init.mp4", "seg-00000.m4s"} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", session.URL, nil)
+			if err := mgr.ServeRungSegment(rec, req, session.ID, rung, name); err != nil {
+				t.Fatalf("serve %s/%s: %v", rung, name, err)
+			}
+			if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+				t.Fatalf("%s/%s status=%d len=%d", rung, name, rec.Code, rec.Body.Len())
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(w.dir, "480p", "init.mp4")); err != nil {
+		t.Fatalf("480p init.mp4 not written to its own rung directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(w.dir, "360p", "init.mp4")); err != nil {
+		t.Fatalf("360p init.mp4 not written to its own rung directory: %v", err)
+	}
+
+	// A seek restarts the one ffmpeg at that segment for every rung.
+	w.stop()
+	for _, rung := range []string{"480p", "360p"} {
+		if err := os.Remove(filepath.Join(w.dir, rung, segmentName(1))); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	if err := mgr.ServeRungSegment(rec, httptest.NewRequest("GET", session.URL, nil), session.ID, "360p", segmentName(1)); err != nil {
+		t.Fatalf("serve 360p segment 1 after a seek: %v", err)
+	}
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("restarted 360p segment status=%d len=%d", rec.Code, rec.Body.Len())
+	}
+	if err := waitForFile(context.Background(), filepath.Join(w.dir, "480p", segmentName(1)), 45*time.Second, 50*time.Millisecond); err != nil {
+		t.Fatalf("480p did not restart alongside 360p: %v", err)
+	}
+}
+
+func ffmpegWithVideoToolbox(t *testing.T) string {
+	t.Helper()
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not on PATH")
+	}
+	out, err := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
+	if err != nil || !strings.Contains(string(out), "h264_videotoolbox") {
+		t.Skip("ffmpeg has no VideoToolbox encoder")
+	}
+	return ffmpeg
+}
