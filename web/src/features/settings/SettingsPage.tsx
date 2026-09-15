@@ -236,6 +236,8 @@ function VideoCacheSection() {
 // /api/fs/dirs omits dot-prefixed entries, so a hidden cache folder can never
 // be browsed to: the name field below is the only way to name (and have the
 // server create) one inside a library root.
+const defaultCacheFolderName = '.hls'
+
 function CacheFolderDialog({
   open,
   currentDir,
@@ -246,7 +248,7 @@ function CacheFolderDialog({
   onClose: () => void
 }) {
   const [path, setPath] = useState(() => cacheBrowseStart(currentDir))
-  const [folderName, setFolderName] = useState('')
+  const [folderName, setFolderName] = useState(defaultCacheFolderName)
   const dirs = useFsDirs(path, open)
   const setCacheDir = useSetHLSCacheDir()
   const { toast } = useToast()
@@ -301,7 +303,7 @@ function CacheFolderDialog({
           dirs={dirs}
           onNavigate={(next) => {
             setPath(next)
-            setFolderName('')
+            setFolderName(defaultCacheFolderName)
           }}
         />
 
