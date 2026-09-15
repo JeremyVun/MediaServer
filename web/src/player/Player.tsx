@@ -179,6 +179,16 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   // Height of the frames playing now, from the video element's `resize` event —
   // how Auto reports the size an HLS variant switch landed on.
   const [playingHeight, setPlayingHeight] = useState(0)
+  // A quality or audio change re-POSTs /play and the session query has no
+  // data until it lands; holding the last list keeps the menu mounted.
+  const [held, setHeld] = useState<{ itemID: number; qualities: QualityRung[] }>({
+    itemID,
+    qualities: NO_QUALITIES,
+  })
+  if (session.data && (held.itemID !== itemID || held.qualities !== session.data.qualities)) {
+    setHeld({ itemID, qualities: session.data.qualities })
+  }
+  const heldQualities = held.itemID === itemID ? held.qualities : NO_QUALITIES
   const [controlsVisible, setControlsVisible] = useState(true)
   const [fullscreen, setFullscreen] = useState(false)
   const [videoError, setVideoError] = useState(false)
@@ -685,7 +695,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     }
   }
 
-  const qualities = session.data?.qualities ?? NO_QUALITIES
+  const qualities = session.data?.qualities ?? heldQualities
   const resolvedQuality = session.data?.quality ?? requestedQuality
   const qualityLabel = resolveQualityLabel(resolvedQuality, qualities, playingHeight)
   const loading = item.isPending || session.isPending
