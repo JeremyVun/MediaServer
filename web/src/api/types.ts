@@ -16,6 +16,17 @@ export interface Health {
   queue_depth: number
 }
 
+export interface HLSCacheSettings {
+  dir: string
+  max_bytes: number
+  used_bytes: number
+  available: boolean
+}
+
+export interface SettingsResponse {
+  hls_cache: HLSCacheSettings
+}
+
 export interface RootInfo {
   id: number
   name: string

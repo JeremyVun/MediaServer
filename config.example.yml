@@ -14,6 +14,8 @@ data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, logs
 # scanner out of it (a visible directory inside a root is rejected at boot).
 # If that volume is unplugged the server still starts; transcoded playback
 # resumes when it is mounted again. Direct play never touches this cache.
+# The folder can also be changed from the Settings page; once it has been,
+# that choice is stored in the database and this value is ignored.
 hls_cache:
   dir: "~/media-server/data/hls"
   max_gb: 20

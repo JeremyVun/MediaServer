@@ -83,11 +83,18 @@ func run() error {
 		return err
 	}
 
-	if !dirExists(cfg.HLSCache.Dir) {
-		logger.Warn("hls cache dir unavailable (volume not mounted); transcoded playback waits for it", "dir", cfg.HLSCache.Dir)
+	hlsCacheDir := cfg.HLSCache.Dir
+	if saved, err := st.GetSetting(ctx, store.SettingHLSCacheDir); err == nil && saved != "" {
+		hlsCacheDir = saved
+		logger.Info("hls cache dir from settings", "dir", hlsCacheDir)
+	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("read settings: %w", err)
+	}
+	if !dirExists(hlsCacheDir) {
+		logger.Warn("hls cache dir unavailable (volume not mounted); transcoded playback waits for it", "dir", hlsCacheDir)
 	}
 	playbackManager := playback.NewManager(playback.Options{
-		CacheDir:        cfg.HLSCache.Dir,
+		CacheDir:        hlsCacheDir,
 		MaxBytes:        int64(cfg.HLSCache.MaxGB * 1000 * 1000 * 1000),
 		FFmpeg:          cfg.Transcode.FFmpeg,
 		FFprobe:         cfg.Transcode.FFprobe,

@@ -824,3 +824,21 @@ func TestEnqueueJobRevivesFailedAndPullsQueuedForward(t *testing.T) {
 		t.Fatalf("claim after pull-forward: %v", err)
 	}
 }
+
+func TestSettingsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if _, err := s.GetSetting(ctx, store.SettingHLSCacheDir); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("unset err = %v, want ErrNotFound", err)
+	}
+	if err := s.SetSetting(ctx, store.SettingHLSCacheDir, "/Volumes/Media/.hls"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := s.SetSetting(ctx, store.SettingHLSCacheDir, "/Volumes/Other/.hls"); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	got, err := s.GetSetting(ctx, store.SettingHLSCacheDir)
+	if err != nil || got != "/Volumes/Other/.hls" {
+		t.Fatalf("get = %q err=%v", got, err)
+	}
+}

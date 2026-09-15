@@ -106,8 +106,8 @@ func TestHLSCacheDirInsideRootMustBeHidden(t *testing.T) {
 	cases := []struct {
 		name, hls, wantErr string
 	}{
-		{"visible subdir", filepath.Join(root, "hls"), "would be scanned as media"},
-		{"root itself", root, "is library root"},
+		{"visible subdir", filepath.Join(root, "hls"), "is not hidden"},
+		{"root itself", root, "is a library root"},
 		{"hidden subdir", filepath.Join(root, ".hls"), ""},
 		{"nested under hidden", filepath.Join(root, ".cache", "hls"), ""},
 		{"outside root", filepath.Join(dir, "hls"), ""},

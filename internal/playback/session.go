@@ -142,15 +142,16 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 	if req.Decision.Mode != ModeHLS {
 		return Session{}, fmt.Errorf("cannot start hls session for mode %q", req.Decision.Mode)
 	}
-	if m.cacheDir == "" {
+	cacheDir := m.CacheDir()
+	if cacheDir == "" {
 		return Session{}, fmt.Errorf("hls cache dir is required")
 	}
-	if err := os.MkdirAll(m.cacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return Session{}, fmt.Errorf("%w: %v", ErrCacheUnavailable, err)
 	}
 	hash := ProfileHash(req.File, req.Capabilities, req.Decision, req.SubtitleStreamIndex, req.AudioStreamIndex)
 	key := strconv.FormatInt(req.File.ID, 10) + "/" + hash
-	dir := filepath.Join(m.cacheDir, strconv.FormatInt(req.File.ID, 10), hash)
+	dir := filepath.Join(cacheDir, strconv.FormatInt(req.File.ID, 10), hash)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Session{}, fmt.Errorf("%w: %v", ErrCacheUnavailable, err)
 	}
@@ -158,7 +159,7 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 
 	var keyframes *keyframeIndex
 	if req.Decision.Tier == TierRemux || req.Decision.Tier == TierAudioTranscode {
-		idx, err := loadOrProbeKeyframes(ctx, m.cacheDir, m.ffprobe, req.SourcePath, req.File)
+		idx, err := loadOrProbeKeyframes(ctx, cacheDir, m.ffprobe, req.SourcePath, req.File)
 		if err != nil {
 			return Session{}, fmt.Errorf("index playback keyframes: %w", err)
 		}
@@ -279,10 +280,11 @@ func (m *Manager) Shutdown(ctx context.Context) {
 }
 
 func (m *Manager) PruneCache(ctx context.Context) error {
-	if m.maxBytes <= 0 || m.cacheDir == "" {
+	cacheDir := m.CacheDir()
+	if m.maxBytes <= 0 || cacheDir == "" {
 		return nil
 	}
-	entries, total, err := cacheEntries(m.cacheDir)
+	entries, total, err := cacheEntries(cacheDir)
 	if err != nil {
 		return err
 	}
@@ -321,6 +323,74 @@ func (m *Manager) workerForSession(sid string) (*worker, error) {
 		return nil, ErrNotFound
 	}
 	return w, nil
+}
+
+func (m *Manager) CacheDir() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cacheDir
+}
+
+func (m *Manager) CacheLimit() int64 { return m.maxBytes }
+
+// CacheUsage totals the segment and index files under the cache dir. A
+// missing directory (unmounted volume) counts as empty.
+func (m *Manager) CacheUsage() (int64, error) {
+	_, total, err := cacheEntries(m.CacheDir())
+	return total, err
+}
+
+// SetCacheDir points new sessions at dir. Every current session is stopped:
+// its worker writes into the old tree, which the caller is expected to clear
+// with ClearCache once this returns. Returns the previous directory.
+func (m *Manager) SetCacheDir(dir string) string {
+	m.StopAll()
+	m.mu.Lock()
+	old := m.cacheDir
+	m.cacheDir = dir
+	m.mu.Unlock()
+	return old
+}
+
+// ClearCache deletes the per-file trees the manager created under dir and
+// nothing else, so a misconfigured path can never take unrelated data with
+// it. Entries still in use by a running worker are skipped.
+func (m *Manager) ClearCache(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	active := m.activeCacheDirs()
+	var firstErr error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if _, err := strconv.ParseInt(entry.Name(), 10, 64); err != nil {
+			continue
+		}
+		fileDir := filepath.Join(dir, entry.Name())
+		inUse := false
+		for activeDir := range active {
+			if strings.HasPrefix(activeDir, fileDir+string(filepath.Separator)) {
+				inUse = true
+				break
+			}
+		}
+		if inUse {
+			continue
+		}
+		if err := os.RemoveAll(fileDir); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (m *Manager) activeCacheDirs() map[string]bool {

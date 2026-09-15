@@ -28,6 +28,8 @@ import {
   useRestoreItem,
   useRetryJob,
   useRoots,
+  useSetHLSCacheDir,
+  useSettings,
   useTrashJobFile,
 } from '../../api/queries.ts'
 import type { ItemSummary, Job, RootInfo } from '../../api/types.ts'
@@ -144,6 +146,7 @@ export function SettingsPage() {
             ))}
           </section>
 
+          <VideoCacheSection />
           <TrashSection />
           <JobsSection />
           <AboutSection />
@@ -173,6 +176,149 @@ export function SettingsPage() {
         </p>
       </Dialog>
     </main>
+  )
+}
+
+function VideoCacheSection() {
+  const settings = useSettings()
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const cache = settings.data?.hls_cache
+
+  return (
+    <section aria-labelledby="cache-heading" className="space-y-3">
+      <div className="space-y-1">
+        <h2 id="cache-heading" className="text-lg font-semibold">
+          Video cache
+        </h2>
+        <p className="text-sm text-secondary">
+          Temporary files created when converting videos for playback.
+        </p>
+      </div>
+
+      {settings.isPending && <Skeleton className="h-28" />}
+      {settings.isError && <EmptyState text="Can't load video cache" />}
+
+      {cache && (
+        <Card role="region" aria-label="Video cache" className="p-4">
+          <div className="flex flex-col gap-4">
+            <div className="min-w-0 space-y-1">
+              <p className="truncate font-mono text-sm text-secondary">{cache.dir}</p>
+              {cache.available ? (
+                <p className="text-sm text-secondary">
+                  {formatBytes(cache.used_bytes)} of {formatBytes(cache.max_bytes)}
+                </p>
+              ) : (
+                <p className="flex items-center gap-2 text-sm text-secondary">
+                  <span aria-hidden className="bg-danger inline-flex size-3 shrink-0 rounded-full" />
+                  Drive not connected. Playback waits until it is back.
+                </p>
+              )}
+            </div>
+            <Button className="self-start" onClick={() => setPickerOpen(true)}>
+              <FolderOpen aria-hidden className="size-4" strokeWidth={1.75} />
+              Change folder
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {pickerOpen && cache && (
+        <CacheFolderDialog
+          open={pickerOpen}
+          currentDir={cache.dir}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+    </section>
+  )
+}
+
+// /api/fs/dirs omits dot-prefixed entries, so a hidden cache folder can never
+// be browsed to: the name field below is the only way to name (and have the
+// server create) one inside a library root.
+function CacheFolderDialog({
+  open,
+  currentDir,
+  onClose,
+}: {
+  open: boolean
+  currentDir: string
+  onClose: () => void
+}) {
+  const [path, setPath] = useState(() => cacheBrowseStart(currentDir))
+  const [folderName, setFolderName] = useState('')
+  const dirs = useFsDirs(path, open)
+  const setCacheDir = useSetHLSCacheDir()
+  const { toast } = useToast()
+  const runOrToast = makeRunOrToast(toast)
+
+  const browsed = dirs.data?.path ?? path
+  const trimmedName = folderName.trim()
+  const chosen = trimmedName ? joinPath(browsed, trimmedName) : browsed
+
+  const confirm = async () => {
+    const ok = await runOrToast(
+      () => setCacheDir.mutateAsync(chosen),
+      "Couldn't change cache folder",
+    )
+    if (!ok) return
+    toast({ message: 'Cache folder changed' })
+    onClose()
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Choose cache folder"
+      width="content"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!dirs.data}
+            pending={setCacheDir.isPending}
+            onClick={() => void confirm()}
+          >
+            <FolderOpen aria-hidden className="size-4" strokeWidth={1.75} />
+            Use this folder
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-secondary">
+          Inside a library folder, the cache folder must be hidden, with a name starting with a dot
+          so the library ignores it. Changing folders stops any video currently playing and deletes
+          the old cache contents to free space.
+        </p>
+
+        <FolderBrowser
+          path={path}
+          dirs={dirs}
+          onNavigate={(next) => {
+            setPath(next)
+            setFolderName('')
+          }}
+        />
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium" htmlFor="cache-folder-name">
+            New folder name
+          </label>
+          <Input
+            id="cache-folder-name"
+            value={folderName}
+            onChange={(event) => setFolderName(event.target.value)}
+            icon={<Folder aria-hidden className="size-4" strokeWidth={1.75} />}
+          />
+          <p className="truncate font-mono text-sm text-secondary">{chosen}</p>
+        </div>
+      </div>
+    </Dialog>
   )
 }
 
@@ -576,8 +722,6 @@ function AddRootDialog({ open, onClose }: { open: boolean; onClose: () => void }
   const addRoot = useAddRoot()
   const { toast } = useToast()
 
-  const crumbs = useMemo(() => breadcrumbs(path), [path])
-
   const navigate = (nextPath: string) => {
     setPath(nextPath)
     setSelectedPath(null)
@@ -631,57 +775,7 @@ function AddRootDialog({ open, onClose }: { open: boolean; onClose: () => void }
       }
     >
       <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <IconButton
-            aria-label="Up one level"
-            disabled={!dirs.data?.parent}
-            onClick={() => dirs.data?.parent && navigate(dirs.data.parent)}
-          >
-            <ArrowLeft aria-hidden className="size-5" strokeWidth={1.75} />
-          </IconButton>
-          <nav aria-label="Folder path" className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
-            {crumbs.map((crumb, index) => (
-              <span key={crumb.path} className="inline-flex min-w-0 items-center gap-1">
-                {index > 0 && (
-                  <ChevronRight aria-hidden className="text-tertiary size-4" strokeWidth={1.75} />
-                )}
-                <button
-                  type="button"
-                  className="hover:bg-accent-subtle max-w-32 truncate rounded-sm px-2 py-1 text-primary"
-                  onClick={() => navigate(crumb.path)}
-                >
-                  {crumb.label}
-                </button>
-              </span>
-            ))}
-          </nav>
-        </div>
-
-        <div className="bg-inset border-line max-h-72 overflow-auto rounded-md border">
-          {dirs.isPending && (
-            <div className="space-y-2 p-3">
-              {Array.from({ length: 5 }, (_, i) => (
-                <Skeleton key={i} className="h-10" />
-              ))}
-            </div>
-          )}
-          {dirs.isError && <div className="p-4 text-sm text-danger">Can't load folder</div>}
-          {dirs.data && dirs.data.dirs.length === 0 && (
-            <div className="p-4 text-sm text-secondary">No folders</div>
-          )}
-          {dirs.data?.dirs.map((dir) => (
-            <button
-              key={dir.path}
-              type="button"
-              className="border-line flex h-12 w-full items-center gap-3 border-b px-3 text-left last:border-b-0 hover:bg-accent-subtle"
-              onClick={() => navigate(dir.path)}
-            >
-              <Folder aria-hidden className="text-secondary size-5 shrink-0" strokeWidth={1.75} />
-              <span className="min-w-0 flex-1 truncate text-primary">{dir.name}</span>
-              <ChevronRight aria-hidden className="text-tertiary size-5 shrink-0" strokeWidth={1.75} />
-            </button>
-          ))}
-        </div>
+        <FolderBrowser path={path} dirs={dirs} onNavigate={navigate} />
 
         {selectedPath && (
           <div className="space-y-2">
@@ -701,6 +795,74 @@ function AddRootDialog({ open, onClose }: { open: boolean; onClose: () => void }
         {inlineError && <p className="text-sm text-danger">{inlineError}</p>}
       </div>
     </Dialog>
+  )
+}
+
+// Breadcrumb + subfolder list, shared by the root and cache-folder pickers.
+function FolderBrowser({
+  path,
+  dirs,
+  onNavigate,
+}: {
+  path: string
+  dirs: ReturnType<typeof useFsDirs>
+  onNavigate: (path: string) => void
+}) {
+  const crumbs = useMemo(() => breadcrumbs(path), [path])
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <IconButton
+          aria-label="Up one level"
+          disabled={!dirs.data?.parent}
+          onClick={() => dirs.data?.parent && onNavigate(dirs.data.parent)}
+        >
+          <ArrowLeft aria-hidden className="size-5" strokeWidth={1.75} />
+        </IconButton>
+        <nav aria-label="Folder path" className="flex min-w-0 flex-wrap items-center gap-1 text-sm">
+          {crumbs.map((crumb, index) => (
+            <span key={crumb.path} className="inline-flex min-w-0 items-center gap-1">
+              {index > 0 && (
+                <ChevronRight aria-hidden className="text-tertiary size-4" strokeWidth={1.75} />
+              )}
+              <button
+                type="button"
+                className="hover:bg-accent-subtle max-w-32 truncate rounded-sm px-2 py-1 text-primary"
+                onClick={() => onNavigate(crumb.path)}
+              >
+                {crumb.label}
+              </button>
+            </span>
+          ))}
+        </nav>
+      </div>
+
+      <div className="bg-inset border-line max-h-72 overflow-auto rounded-md border">
+        {dirs.isPending && (
+          <div className="space-y-2 p-3">
+            {Array.from({ length: 5 }, (_, i) => (
+              <Skeleton key={i} className="h-10" />
+            ))}
+          </div>
+        )}
+        {dirs.isError && <div className="p-4 text-sm text-danger">Can't load folder</div>}
+        {dirs.data && dirs.data.dirs.length === 0 && (
+          <div className="p-4 text-sm text-secondary">No folders</div>
+        )}
+        {dirs.data?.dirs.map((dir) => (
+          <button
+            key={dir.path}
+            type="button"
+            className="border-line flex h-12 w-full items-center gap-3 border-b px-3 text-left last:border-b-0 hover:bg-accent-subtle"
+            onClick={() => onNavigate(dir.path)}
+          >
+            <Folder aria-hidden className="text-secondary size-5 shrink-0" strokeWidth={1.75} />
+            <span className="min-w-0 flex-1 truncate text-primary">{dir.name}</span>
+            <ChevronRight aria-hidden className="text-tertiary size-5 shrink-0" strokeWidth={1.75} />
+          </button>
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -724,6 +886,15 @@ function breadcrumbs(path: string): { label: string; path: string }[] {
     crumbs.push({ label: part, path: current })
   }
   return crumbs
+}
+
+function cacheBrowseStart(dir: string): string {
+  const parent = dir.slice(0, dir.lastIndexOf('/'))
+  return parent === '/Volumes' || parent.startsWith('/Volumes/') ? parent : '/Volumes'
+}
+
+function joinPath(base: string, name: string): string {
+  return base === '/' ? `/${name}` : `${base}/${name}`
 }
 
 function defaultRootName(path: string): string {

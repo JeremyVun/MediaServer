@@ -16,6 +16,7 @@ import type {
   ProgressUpdate,
   PurgeTrashResponse,
   RescanResponse,
+  SettingsResponse,
   TrashJobFileResponse,
 } from './types.ts'
 
@@ -38,6 +39,28 @@ export function useHealth() {
     queryKey: ['health'],
     queryFn: () => api<Health>('/api/health'),
     refetchInterval: 30_000,
+  })
+}
+
+export function useSettings() {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => api<SettingsResponse>('/api/settings'),
+    refetchInterval: 30_000,
+  })
+}
+
+// Moving the cache stops in-flight transcodes, so health (active sessions,
+// queue depth) is stale the moment this succeeds.
+export function useSetHLSCacheDir() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (dir: string) =>
+      jsonApi<SettingsResponse>('/api/settings/hls-cache', 'PUT', { dir }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['settings'] })
+      void queryClient.invalidateQueries({ queryKey: ['health'] })
+    },
   })
 }
 

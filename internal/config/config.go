@@ -6,6 +6,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -185,30 +186,50 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// validateHLSCacheDir rejects a cache directory the library scanner would
-// index (HLS output includes init.mp4, a video extension) and creates it
-// unless its volume is unmounted, which is an offline state like any other.
+var (
+	ErrCacheDirIsRoot    = errors.New("hls cache dir is a library root")
+	ErrCacheDirNotHidden = errors.New("hls cache dir inside a library root is not hidden")
+)
+
+// CheckHLSCacheDir rejects a cache directory the library scanner would index:
+// HLS output includes init.mp4, a video extension, so a directory inside a
+// root must have a hidden (dot-prefixed) component. rootPaths are the roots
+// to check against, from config at boot or from the database at runtime.
+func CheckHLSCacheDir(dir string, rootPaths []string) error {
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("hls cache dir must be absolute, got %q", dir)
+	}
+	for _, rootPath := range rootPaths {
+		rel, err := filepath.Rel(rootPath, dir)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if rel == "." {
+			return fmt.Errorf("%w: %s; use a hidden subdirectory such as %s",
+				ErrCacheDirIsRoot, dir, filepath.Join(rootPath, ".hls"))
+		}
+		if !hiddenRelPath(rel) {
+			return fmt.Errorf("%w: %s is inside %s; use a hidden directory such as %s",
+				ErrCacheDirNotHidden, dir, rootPath, filepath.Join(rootPath, ".hls"))
+		}
+	}
+	return nil
+}
+
+// validateHLSCacheDir applies CheckHLSCacheDir to the config's own roots and
+// creates the directory unless its volume is unmounted, which is an offline
+// state like any other.
 func (c *Config) validateHLSCacheDir() error {
 	dir := c.HLSCache.Dir
 	if dir == "" {
 		return nil
 	}
-	if !filepath.IsAbs(dir) {
-		return fmt.Errorf("hls_cache.dir must be absolute, got %q", dir)
-	}
+	rootPaths := make([]string, 0, len(c.Roots))
 	for _, r := range c.Roots {
-		rel, err := filepath.Rel(r.Path, dir)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		if rel == "." {
-			return fmt.Errorf("hls_cache.dir %q is library root %q itself; use a hidden subdirectory such as %s",
-				dir, r.Name, filepath.Join(r.Path, ".hls"))
-		}
-		if !hiddenRelPath(rel) {
-			return fmt.Errorf("hls_cache.dir %q is inside library root %q and would be scanned as media; use a hidden directory such as %s",
-				dir, r.Name, filepath.Join(r.Path, ".hls"))
-		}
+		rootPaths = append(rootPaths, r.Path)
+	}
+	if err := CheckHLSCacheDir(dir, rootPaths); err != nil {
+		return fmt.Errorf("hls_cache.dir: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil && !volumeAbsent(dir) {
 		return fmt.Errorf("create %s: %w", dir, err)
@@ -224,6 +245,10 @@ func hiddenRelPath(rel string) bool {
 	}
 	return false
 }
+
+// VolumeAbsent reports whether path lives under a /Volumes mount point that
+// is not currently present, i.e. the removable disk is unplugged.
+func VolumeAbsent(path string) bool { return volumeAbsent(path) }
 
 // volumeAbsent reports whether path lives under a /Volumes mount point that
 // is not currently present, i.e. the removable disk is unplugged.

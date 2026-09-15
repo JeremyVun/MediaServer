@@ -116,6 +116,10 @@ func TestMigration0005CollapsesFailedJobs(t *testing.T) {
 			t.Fatalf("seed %d: %v", r.id, err)
 		}
 	}
+	// Rewinding replays 0006 too, so drop its table for the replay.
+	if _, err := sqldb.Exec(`DROP TABLE settings`); err != nil {
+		t.Fatalf("drop settings: %v", err)
+	}
 	if _, err := sqldb.Exec(`PRAGMA user_version = 4`); err != nil {
 		t.Fatalf("rewind: %v", err)
 	}
