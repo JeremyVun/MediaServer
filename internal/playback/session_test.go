@@ -147,7 +147,7 @@ func TestWorkerForwardWindowUsesDiskProgress(t *testing.T) {
 	}
 
 	// Disk high is 9, window is 5: segment 14 waits (no restart attempted).
-	if err := w.ensureSegment(context.Background(), 14); err != nil {
+	if err := w.ensureSegment(context.Background(), 14, dir); err != nil {
 		t.Fatalf("in-window segment should wait, got restart error: %v", err)
 	}
 	if !w.running {
@@ -156,7 +156,7 @@ func TestWorkerForwardWindowUsesDiskProgress(t *testing.T) {
 
 	// Segment 15 is beyond the window: a restart is attempted (and fails,
 	// because the ffmpeg binary doesn't exist — that failure is the signal).
-	if err := w.ensureSegment(context.Background(), 15); err == nil {
+	if err := w.ensureSegment(context.Background(), 15, dir); err == nil {
 		t.Fatal("out-of-window segment should attempt a restart")
 	}
 }

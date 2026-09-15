@@ -211,12 +211,27 @@ func (m *Manager) Playlist(ctx context.Context, sid string) (string, error) {
 	return w.playlist(), nil
 }
 
+// RungPlaylist is one ladder variant's media playlist. Non-ladder sessions and
+// rungs this session does not encode are ErrNotFound.
+func (m *Manager) RungPlaylist(ctx context.Context, sid, rung string) (string, error) {
+	w, err := m.workerForSession(sid)
+	if err != nil {
+		return "", err
+	}
+	w.touch()
+	return w.rungPlaylist(rung)
+}
+
 func (m *Manager) ServeSegment(wr http.ResponseWriter, r *http.Request, sid, name string) error {
+	return m.ServeRungSegment(wr, r, sid, "", name)
+}
+
+func (m *Manager) ServeRungSegment(wr http.ResponseWriter, r *http.Request, sid, rung, name string) error {
 	w, err := m.workerForSession(sid)
 	if err != nil {
 		return err
 	}
-	return w.serveSegment(wr, r, name)
+	return w.serveSegment(wr, r, rung, name)
 }
 
 func (m *Manager) EndSession(sid string) bool {
@@ -471,10 +486,49 @@ func (w *worker) idleSince(now time.Time, timeout time.Duration) bool {
 }
 
 func (w *worker) playlist() string {
-	if w.keyframes != nil {
+	switch {
+	case w.isLadder():
+		return MasterPlaylist(w.req.Decision.Rungs, w.ladderHEVC())
+	case w.keyframes != nil:
 		return w.keyframePlaylist()
 	}
+	return w.gridPlaylist()
+}
 
+func (w *worker) rungPlaylist(rung string) (string, error) {
+	if _, err := w.outputDir(rung); err != nil {
+		return "", err
+	}
+	return w.gridPlaylist(), nil
+}
+
+func (w *worker) isLadder() bool {
+	return w.req.Decision.Tier == TierLadder
+}
+
+func (w *worker) ladderHEVC() bool {
+	_, hevc := ladderVideoCodec(w.req.Capabilities)
+	return hevc
+}
+
+// outputDir is the directory a request's segments live in: the profile dir for
+// a flat session, one subdirectory per rung for a ladder.
+func (w *worker) outputDir(rung string) (string, error) {
+	if !w.isLadder() {
+		if rung != "" {
+			return "", ErrNotFound
+		}
+		return w.dir, nil
+	}
+	for _, r := range w.req.Decision.Rungs {
+		if r.ID == rung {
+			return filepath.Join(w.dir, rung), nil
+		}
+	}
+	return "", ErrNotFound
+}
+
+func (w *worker) gridPlaylist() string {
 	duration := w.req.File.DurationS
 	if duration <= 0 {
 		duration = w.segmentDuration.Seconds()
@@ -516,10 +570,14 @@ func (w *worker) keyframePlaylist() string {
 	return b.String()
 }
 
-func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, name string) error {
+func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, rung, name string) error {
 	w.touch()
+	dir, err := w.outputDir(rung)
+	if err != nil {
+		return err
+	}
 	if name == "init.mp4" {
-		path := filepath.Join(w.dir, name)
+		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); err != nil {
 			if err := w.ensureRunning(r.Context(), 0); err != nil {
 				return err
@@ -537,9 +595,9 @@ func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, name stri
 	if !ok || n >= w.segmentCount() {
 		return ErrNotFound
 	}
-	path := filepath.Join(w.dir, segmentName(n))
+	path := filepath.Join(dir, segmentName(n))
 	if _, err := os.Stat(path); err != nil {
-		if err := w.ensureSegment(r.Context(), n); err != nil {
+		if err := w.ensureSegment(r.Context(), n, dir); err != nil {
 			return err
 		}
 		if err := waitForFile(r.Context(), path, w.segmentWait, w.pollInterval); err != nil {
@@ -551,10 +609,12 @@ func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, name stri
 	return nil
 }
 
-func (w *worker) ensureSegment(ctx context.Context, n int) error {
+// ensureSegment measures progress against dir. A ladder's rungs advance in
+// lockstep, so the requested rung's newest segment speaks for all of them.
+func (w *worker) ensureSegment(ctx context.Context, n int, dir string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.running && n >= w.startNumber && n <= w.diskHighLocked()+w.forwardWindow() {
+	if w.running && n >= w.startNumber && n <= w.diskHighLocked(dir)+w.forwardWindow() {
 		return nil
 	}
 	return w.startLocked(ctx, n)
@@ -574,6 +634,11 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		return err
 	}
+	for _, rung := range w.req.Decision.Rungs {
+		if err := os.MkdirAll(filepath.Join(w.dir, rung.ID), 0o755); err != nil {
+			return err
+		}
+	}
 
 	startNumber, seekS := n, float64(n)*w.segmentDuration.Seconds()
 	startTime := seekS
@@ -591,7 +656,7 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	}
 
 	semHeld := false
-	if w.req.Decision.Tier == TierFullTranscode {
+	if videoEncodingTier(w.req.Decision.Tier) {
 		select {
 		case w.videoSem <- struct{}{}:
 			semHeld = true
@@ -658,6 +723,12 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	return nil
 }
 
+// videoEncodingTier gates transcode.max_concurrent. A ladder holds one slot
+// however many rungs its single ffmpeg encodes.
+func videoEncodingTier(tier string) bool {
+	return tier == TierFullTranscode || tier == TierLadder
+}
+
 func (w *worker) stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -677,9 +748,9 @@ func (w *worker) stopLocked() {
 // the ground truth of transcode progress. The old wall-clock estimate assumed
 // exactly 1× realtime, so a fast remux looked "behind" and a prefetching
 // client's miss would kill and restart a healthy ffmpeg mid-stream.
-func (w *worker) diskHighLocked() int {
+func (w *worker) diskHighLocked(dir string) int {
 	high := w.startNumber - 1
-	entries, err := os.ReadDir(w.dir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return high
 	}

@@ -17,11 +17,13 @@ const (
 	ReasonContainerUnsupported = "container_not_supported"
 	ReasonSubtitleBurnIn       = "subtitle_burn_in"
 	ReasonAudioTrackSelection  = "audio_track_selection"
+	ReasonQuality              = "quality"
 
 	TierDirect         = "direct"
 	TierRemux          = "remux"
 	TierAudioTranscode = "audio_transcode"
 	TierFullTranscode  = "full_transcode"
+	TierLadder         = "ladder"
 )
 
 type Capabilities struct {
@@ -59,6 +61,10 @@ type Decision struct {
 	AudioPick *Stream
 	VideoCopy bool
 	AudioCopy bool
+	// Quality is the resolved request (design decision 3); Rungs is the ladder
+	// it encodes, empty for every non-ladder tier.
+	Quality string
+	Rungs   []RungOutput
 }
 
 // Decide picks direct play or an HLS tier. A non-nil audioStreamIndex always
@@ -66,23 +72,16 @@ type Decision struct {
 // clients omit it for the container's default track and any explicit pick is
 // remapped by ffmpeg. Codec support then only matters for the picked stream.
 func Decide(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamIndex, audioStreamIndex *int) Decision {
-	var audioPick *Stream
-	if audioStreamIndex != nil {
-		if st, ok := FindStream(streams, *audioStreamIndex); ok && st.Kind == "audio" {
-			audioPick = &st
-		}
-	}
-	if subtitleStreamIndex != nil {
-		if st, ok := FindStream(streams, *subtitleStreamIndex); ok && IsImageSubtitle(st.Codec) {
-			return Decision{
-				Mode:      ModeHLS,
-				Reason:    ReasonSubtitleBurnIn,
-				Tier:      TierFullTranscode,
-				BurnIn:    &st,
-				AudioPick: audioPick,
-				VideoCopy: false,
-				AudioCopy: audioStreamsSupported(streams, caps, audioPick),
-			}
+	audioPick := pickAudioStream(streams, audioStreamIndex)
+	if burnIn := pickBurnInStream(streams, subtitleStreamIndex); burnIn != nil {
+		return Decision{
+			Mode:      ModeHLS,
+			Reason:    ReasonSubtitleBurnIn,
+			Tier:      TierFullTranscode,
+			BurnIn:    burnIn,
+			AudioPick: audioPick,
+			VideoCopy: false,
+			AudioCopy: audioStreamsSupported(streams, caps, audioPick),
 		}
 	}
 
@@ -102,6 +101,52 @@ func Decide(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamI
 		return Decision{Mode: ModeHLS, Reason: ReasonContainerUnsupported, Tier: TierRemux, AudioPick: audioPick, VideoCopy: true, AudioCopy: true}
 	}
 	return Decision{Mode: ModeHLS, Reason: ReasonAudioTrackSelection, Tier: TierRemux, AudioPick: audioPick, VideoCopy: true, AudioCopy: true}
+}
+
+// DecideQuality resolves a requested quality against the rungs the file offers
+// and returns the ladder decision for anything but original. Original delegates
+// to Decide, so the whole existing pipeline stays byte-identical.
+func DecideQuality(quality string, file MediaFile, streams []Stream, caps Capabilities, subtitleStreamIndex, audioStreamIndex *int) (Decision, error) {
+	offered := OfferedRungs(file, streams)
+	resolved, err := ResolveQuality(quality, offered)
+	if err != nil {
+		return Decision{}, err
+	}
+	rungs := RungsFor(resolved, offered)
+	if len(rungs) == 0 {
+		decision := Decide(file, streams, caps, subtitleStreamIndex, audioStreamIndex)
+		decision.Quality = QualityOriginal
+		return decision, nil
+	}
+	return Decision{
+		Mode:      ModeHLS,
+		Reason:    ReasonQuality,
+		Tier:      TierLadder,
+		BurnIn:    pickBurnInStream(streams, subtitleStreamIndex),
+		AudioPick: pickAudioStream(streams, audioStreamIndex),
+		Quality:   resolved,
+		Rungs:     rungs,
+	}, nil
+}
+
+func pickAudioStream(streams []Stream, audioStreamIndex *int) *Stream {
+	if audioStreamIndex == nil {
+		return nil
+	}
+	if st, ok := FindStream(streams, *audioStreamIndex); ok && st.Kind == "audio" {
+		return &st
+	}
+	return nil
+}
+
+func pickBurnInStream(streams []Stream, subtitleStreamIndex *int) *Stream {
+	if subtitleStreamIndex == nil {
+		return nil
+	}
+	if st, ok := FindStream(streams, *subtitleStreamIndex); ok && IsImageSubtitle(st.Codec) {
+		return &st
+	}
+	return nil
 }
 
 func FindStream(streams []Stream, streamIndex int) (Stream, bool) {
@@ -160,6 +205,7 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 		Reason              string       `json:"reason,omitempty"`
 		SubtitleStreamIndex *int         `json:"subtitle_stream_index,omitempty"`
 		AudioStreamIndex    *int         `json:"audio_stream_index,omitempty"`
+		Rungs               []RungOutput `json:"rungs,omitempty"`
 	}{
 		Version:             profileVersion,
 		FileID:              file.ID,
@@ -168,15 +214,26 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 		DurationS:           file.DurationS,
 		Width:               file.Width,
 		Height:              file.Height,
-		Capabilities:        normalizeCapabilities(caps),
+		Capabilities:        normalizeCapabilities(ladderCapabilities(caps, decision)),
 		Tier:                decision.Tier,
 		Reason:              decision.Reason,
 		SubtitleStreamIndex: subtitleStreamIndex,
 		AudioStreamIndex:    audioStreamIndex,
+		Rungs:               decision.Rungs,
 	}
 	raw, _ := json.Marshal(profile)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+// ladderCapabilities drops max_height from a ladder profile: the ladder sizes
+// itself, so a phone and an iPad share one cache entry.
+func ladderCapabilities(caps Capabilities, decision Decision) Capabilities {
+	if decision.Tier != TierLadder {
+		return caps
+	}
+	caps.MaxHeight = 0
+	return caps
 }
 
 func videoStreamsSupported(file MediaFile, streams []Stream, caps Capabilities) bool {

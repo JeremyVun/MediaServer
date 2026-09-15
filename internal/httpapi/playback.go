@@ -19,6 +19,7 @@ type playRequest struct {
 	Capabilities        playbackpkg.Capabilities `json:"capabilities"`
 	SubtitleStreamIndex *int                     `json:"subtitle_stream_index"`
 	AudioStreamIndex    *int                     `json:"audio_stream_index"`
+	Quality             string                   `json:"quality"`
 }
 
 type playResponse struct {
@@ -26,7 +27,15 @@ type playResponse struct {
 	Reason    *string            `json:"reason"`
 	URL       string             `json:"url"`
 	SessionID *string            `json:"session_id,omitempty"`
+	Quality   string             `json:"quality"`
+	Qualities []qualityResponse  `json:"qualities"`
 	Subtitles []subtitleResponse `json:"subtitles"`
+}
+
+type qualityResponse struct {
+	ID     string `json:"id"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 type subtitleResponse struct {
@@ -91,13 +100,20 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	media := toPlaybackFile(file)
-	decision := playbackpkg.Decide(media, playbackStreams, req.Capabilities, req.SubtitleStreamIndex, req.AudioStreamIndex)
+	decision, err := playbackpkg.DecideQuality(req.Quality, media, playbackStreams, req.Capabilities, req.SubtitleStreamIndex, req.AudioStreamIndex)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "unknown quality")
+		return
+	}
 	subtitles := subtitleResponses(file.ID, streams)
+	qualities := qualityResponses(playbackpkg.OfferedRungs(media, playbackStreams))
 	if decision.Mode == playbackpkg.ModeDirect {
 		writeJSON(w, http.StatusOK, playResponse{
 			Mode:      "direct",
 			Reason:    nil,
 			URL:       "/api/files/" + strconv.FormatInt(file.ID, 10) + "/stream",
+			Quality:   decision.Quality,
+			Qualities: qualities,
 			Subtitles: subtitles,
 		})
 		return
@@ -130,6 +146,8 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		Reason:    &decision.Reason,
 		URL:       session.URL,
 		SessionID: &session.ID,
+		Quality:   decision.Quality,
+		Qualities: qualities,
 		Subtitles: subtitles,
 	})
 }
@@ -196,12 +214,27 @@ func (s *Server) handleHLSPlaylist(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(body))
 }
 
+func (s *Server) handleHLSRungPlaylist(w http.ResponseWriter, r *http.Request) {
+	if s.playback == nil {
+		writeError(w, http.StatusServiceUnavailable, "playback_unavailable", "transcoded playback is not configured")
+		return
+	}
+	body, err := s.playback.RungPlaylist(r.Context(), r.PathValue("sid"), r.PathValue("rung"))
+	if err != nil {
+		writePlaybackError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(body))
+}
+
 func (s *Server) handleHLSSegment(w http.ResponseWriter, r *http.Request) {
 	if s.playback == nil {
 		writeError(w, http.StatusServiceUnavailable, "playback_unavailable", "transcoded playback is not configured")
 		return
 	}
-	if err := s.playback.ServeSegment(w, r, r.PathValue("sid"), r.PathValue("segment")); err != nil {
+	if err := s.playback.ServeRungSegment(w, r, r.PathValue("sid"), r.PathValue("rung"), r.PathValue("segment")); err != nil {
 		writePlaybackError(w, err)
 	}
 }
@@ -335,6 +368,14 @@ func (s *Server) playableFile(w http.ResponseWriter, r *http.Request, itemID int
 	}
 	writeError(w, http.StatusConflict, "root_offline", "no online file is available")
 	return store.File{}, store.Root{}, false
+}
+
+func qualityResponses(rungs []playbackpkg.RungOutput) []qualityResponse {
+	out := make([]qualityResponse, 0, len(rungs))
+	for _, rung := range rungs {
+		out = append(out, qualityResponse{ID: rung.ID, Width: rung.Width, Height: rung.Height})
+	}
+	return out
 }
 
 func subtitleResponses(fileID int64, streams []store.Stream) []subtitleResponse {

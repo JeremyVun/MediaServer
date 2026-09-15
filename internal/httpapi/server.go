@@ -102,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files/{id}/subs/{name}", s.handleFileSubtitle)
 	mux.HandleFunc("GET /api/sessions/{sid}/master.m3u8", s.handleHLSPlaylist)
 	mux.HandleFunc("GET /api/sessions/{sid}/{segment}", s.handleHLSSegment)
+	mux.HandleFunc("GET /api/sessions/{sid}/{rung}/stream.m3u8", s.handleHLSRungPlaylist)
+	mux.HandleFunc("GET /api/sessions/{sid}/{rung}/{segment}", s.handleHLSSegment)
 	mux.HandleFunc("DELETE /api/sessions/{sid}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/sessions/{sid}/teardown", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
