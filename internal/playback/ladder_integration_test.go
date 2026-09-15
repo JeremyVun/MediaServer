@@ -44,8 +44,8 @@ type ladderRun struct {
 }
 
 var (
-	hevcCaps = Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac"}, MaxHeight: 1080}
-	h264Caps = Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 1080}
+	ladderHEVCCaps = Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac"}, MaxHeight: 1080}
+	ladderH264Caps = Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 1080}
 
 	ladderStreams = []Stream{
 		{StreamIndex: 0, Kind: "video", Codec: "h264"},
@@ -67,11 +67,11 @@ func TestLadderRealFFmpeg(t *testing.T) {
 	scope := generateLadderSource(t, ffmpeg, srcDir, "scope", 1920, 800, 30, 902)
 	portrait := generateLadderSource(t, ffmpeg, srcDir, "portrait", 1080, 1920, 30, 903)
 
-	base, err := runLadder(context.Background(), ffmpeg, t.TempDir(), landscape, QualityAuto, hevcCaps, 0)
+	base, err := runLadder(context.Background(), ffmpeg, t.TempDir(), landscape, QualityAuto, ladderHEVCCaps, 0)
 	if err != nil {
 		t.Fatalf("four-rung hevc ladder: %v\n%s", err, base.stderr)
 	}
-	restart, err := runLadder(context.Background(), ffmpeg, t.TempDir(), landscape, QualityAuto, hevcCaps, ladderRestartSegment)
+	restart, err := runLadder(context.Background(), ffmpeg, t.TempDir(), landscape, QualityAuto, ladderHEVCCaps, ladderRestartSegment)
 	if err != nil {
 		t.Fatalf("restarted four-rung hevc ladder: %v\n%s", err, restart.stderr)
 	}
@@ -155,7 +155,7 @@ func TestLadderRealFFmpeg(t *testing.T) {
 		// H.264 inits only: the stamped level depends on the box and frame
 		// rate, not on how much of the source is encoded.
 		dir := t.TempDir()
-		run, err := runLadderInitsOnly(ffmpeg, dir, landscape, h264Caps)
+		run, err := runLadderInitsOnly(ffmpeg, dir, landscape, ladderH264Caps)
 		if err != nil {
 			t.Fatalf("h264 ladder inits: %v\n%s", err, run.stderr)
 		}
@@ -175,7 +175,7 @@ func TestLadderRealFFmpeg(t *testing.T) {
 	})
 
 	t.Run("EncodeSpeed", func(t *testing.T) {
-		solo, err := runLadder(context.Background(), ffmpeg, t.TempDir(), landscape, "1080p", hevcCaps, 0)
+		solo, err := runLadder(context.Background(), ffmpeg, t.TempDir(), landscape, "1080p", ladderHEVCCaps, 0)
 		if err != nil {
 			t.Fatalf("single-rung ladder: %v\n%s", err, solo.stderr)
 		}
@@ -199,7 +199,7 @@ func TestLadderRealFFmpeg(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				runs[i], errs[i] = runLadder(context.Background(), ffmpeg, dir, landscape, QualityAuto, hevcCaps, 0)
+				runs[i], errs[i] = runLadder(context.Background(), ffmpeg, dir, landscape, QualityAuto, ladderHEVCCaps, 0)
 			}()
 		}
 		wg.Wait()
@@ -228,7 +228,7 @@ func checkRungDimensions(t *testing.T, ffmpeg, ffprobe string, src ladderSource)
 		SegmentWait:     90 * time.Second,
 		PollInterval:    50 * time.Millisecond,
 	})
-	decision, err := DecideQuality(QualityAuto, src.file, ladderStreams, hevcCaps, nil, nil)
+	decision, err := DecideQuality(QualityAuto, src.file, ladderStreams, ladderHEVCCaps, nil, nil)
 	if err != nil {
 		t.Fatalf("%s: decide: %v", src.name, err)
 	}
@@ -236,7 +236,7 @@ func checkRungDimensions(t *testing.T, ffmpeg, ffprobe string, src ladderSource)
 		File:         src.file,
 		SourcePath:   src.path,
 		Streams:      ladderStreams,
-		Capabilities: hevcCaps,
+		Capabilities: ladderHEVCCaps,
 		Decision:     decision,
 	})
 	if err != nil {
@@ -249,7 +249,7 @@ func checkRungDimensions(t *testing.T, ffmpeg, ffprobe string, src ladderSource)
 		t.Fatalf("%s: worker: %v", src.name, err)
 	}
 	for _, rung := range decision.Rungs {
-		for _, name := range []string{"init.mp4", segmentName(0)} {
+		for _, name := range []string{"init.mp4", segmentName(0), segmentName(1)} {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest("GET", session.URL, nil)
 			if err := mgr.ServeRungSegment(rec, req, session.ID, rung.ID, name); err != nil {
@@ -259,7 +259,7 @@ func checkRungDimensions(t *testing.T, ffmpeg, ffprobe string, src ladderSource)
 				t.Fatalf("%s: %s/%s status=%d len=%d", src.name, rung.ID, name, rec.Code, rec.Body.Len())
 			}
 		}
-		w, h := probeDimensions(t, ffprobe, filepath.Join(worker.dir, rung.ID, "init.mp4"))
+		w, h := probeVideoSize(t, ffprobe, filepath.Join(worker.dir, rung.ID, "init.mp4"))
 		if w != rung.Width || h != rung.Height {
 			t.Fatalf("%s %s encoded %dx%d, OfferedRungs says %dx%d", src.name, rung.ID, w, h, rung.Width, rung.Height)
 		}
@@ -270,7 +270,7 @@ func checkRungDimensions(t *testing.T, ffmpeg, ffprobe string, src ladderSource)
 func checkDeclaredLevels(t *testing.T, dir string, rungs []RungOutput, hevc bool, fps float64) {
 	t.Helper()
 	for _, rung := range rungs {
-		track := videoTrack(t, filepath.Join(dir, rung.ID, "init.mp4"))
+		track := mp4VideoTrack(t, filepath.Join(dir, rung.ID, "init.mp4"))
 		declared, err := declaredCodecLevel(rung.codecs(hevc))
 		if err != nil {
 			t.Fatalf("%s: %v", rung.ID, err)
@@ -287,7 +287,7 @@ func checkDeclaredLevels(t *testing.T, dir string, rungs []RungOutput, hevc bool
 func rungSegmentBitrates(t *testing.T, dir, rung string) (peak, average float64) {
 	t.Helper()
 	rungDir := filepath.Join(dir, rung)
-	durations := playlistDurations(t, filepath.Join(rungDir, "stream.m3u8"))
+	durations := segmentDurations(t, filepath.Join(rungDir, "stream.m3u8"))
 	if len(durations) == 0 {
 		t.Fatalf("%s: no segments in stream.m3u8", rung)
 	}
@@ -315,7 +315,7 @@ func ladderDecodeTimes(t *testing.T, run ladderRun) map[string]map[int]float64 {
 	out := make(map[string]map[int]float64, len(run.rungs))
 	for _, rung := range run.rungs {
 		rungDir := filepath.Join(run.dir, rung.ID)
-		track := videoTrack(t, filepath.Join(rungDir, "init.mp4"))
+		track := mp4VideoTrack(t, filepath.Join(rungDir, "init.mp4"))
 		entries, err := os.ReadDir(rungDir)
 		if err != nil {
 			t.Fatal(err)
@@ -326,7 +326,7 @@ func ladderDecodeTimes(t *testing.T, run ladderRun) map[string]map[int]float64 {
 			if !ok {
 				continue
 			}
-			base, ok := segmentDecodeTime(t, filepath.Join(rungDir, entry.Name()), track.id)
+			base, ok := mp4DecodeTime(t, filepath.Join(rungDir, entry.Name()), track.id)
 			if !ok {
 				t.Fatalf("%s/%s carries no tfdt for track %d", rung.ID, entry.Name(), track.id)
 			}
@@ -378,25 +378,27 @@ func runLadder(ctx context.Context, ffmpeg, dir string, src ladderSource, qualit
 func runLadderInitsOnly(ffmpeg, dir string, src ladderSource, caps Capabilities) (ladderRun, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := make(chan ladderRun, 1)
+	type result struct {
+		run ladderRun
+		err error
+	}
+	done := make(chan result, 1)
 	go func() {
-		run, _ := runLadder(ctx, ffmpeg, dir, src, QualityAuto, caps, 0)
-		done <- run
+		run, err := runLadder(ctx, ffmpeg, dir, src, QualityAuto, caps, 0)
+		done <- result{run, err}
 	}()
 	deadline := time.After(2 * time.Minute)
 	for {
 		select {
-		case run := <-done:
-			return run, nil
+		case res := <-done:
+			return res.run, res.err
 		case <-deadline:
 			cancel()
-			return <-done, fmt.Errorf("init segments never appeared")
+			return (<-done).run, fmt.Errorf("init segments never appeared")
 		case <-time.After(50 * time.Millisecond):
 			if ladderInitsWritten(dir) {
 				cancel()
-				run := <-done
-				run.rungs = OfferedRungs(src.file, ladderStreams)
-				return run, nil
+				return (<-done).run, nil
 			}
 		}
 	}
@@ -471,7 +473,7 @@ func ladderTools(t *testing.T) (ffmpeg, ffprobe string) {
 	return ffmpeg, ffprobe
 }
 
-func probeDimensions(t *testing.T, ffprobe, path string) (int, int) {
+func probeVideoSize(t *testing.T, ffprobe, path string) (int, int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -498,7 +500,7 @@ func probeDimensions(t *testing.T, ffprobe, path string) (int, int) {
 	return width, height
 }
 
-func playlistDurations(t *testing.T, path string) map[string]float64 {
+func segmentDurations(t *testing.T, path string) map[string]float64 {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -532,15 +534,15 @@ type mp4Track struct {
 	level     int
 }
 
-// boxContainers maps a box to the bytes to skip before its children start:
+// mp4Containers maps a box to the bytes to skip before its children start:
 // sample description tables and sample entries carry fixed fields first.
-var boxContainers = map[string]int{
+var mp4Containers = map[string]int{
 	"moov": 0, "trak": 0, "mdia": 0, "minf": 0, "stbl": 0, "moof": 0, "traf": 0,
 	"stsd": 8,
 	"hvc1": 78, "hev1": 78, "avc1": 78, "avc3": 78,
 }
 
-func childBoxes(data []byte) map[string][][]byte {
+func mp4Children(data []byte) map[string][][]byte {
 	out := make(map[string][][]byte)
 	for off := 0; off+8 <= len(data); {
 		size := int(binary.BigEndian.Uint32(data[off:]))
@@ -565,15 +567,15 @@ func childBoxes(data []byte) map[string][][]byte {
 	return out
 }
 
-func descend(data []byte, path ...string) []byte {
+func mp4Descend(data []byte, path ...string) []byte {
 	for _, typ := range path {
-		children := childBoxes(data)
+		children := mp4Children(data)
 		boxes := children[typ]
 		if len(boxes) == 0 {
 			return nil
 		}
 		data = boxes[0]
-		if skip, ok := boxContainers[typ]; ok {
+		if skip, ok := mp4Containers[typ]; ok {
 			if skip > len(data) {
 				return nil
 			}
@@ -583,23 +585,23 @@ func descend(data []byte, path ...string) []byte {
 	return data
 }
 
-// videoTrack reads the track id, timescale and stamped codec level straight
+// mp4VideoTrack reads the track id, timescale and stamped codec level straight
 // out of an init segment: ffprobe reports no level at all for an H.264 init.
-func videoTrack(t *testing.T, path string) mp4Track {
+func mp4VideoTrack(t *testing.T, path string) mp4Track {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, trak := range childBoxes(descend(data, "moov"))["trak"] {
-		mdia := descend(trak, "mdia")
-		hdlr := descend(mdia, "hdlr")
+	for _, trak := range mp4Children(mp4Descend(data, "moov"))["trak"] {
+		mdia := mp4Descend(trak, "mdia")
+		hdlr := mp4Descend(mdia, "hdlr")
 		if len(hdlr) < 12 || string(hdlr[8:12]) != "vide" {
 			continue
 		}
 		track := mp4Track{kind: "vide"}
-		tkhd := descend(trak, "tkhd")
-		mdhd := descend(mdia, "mdhd")
+		tkhd := mp4Descend(trak, "tkhd")
+		mdhd := mp4Descend(mdia, "mdhd")
 		if len(tkhd) < 24 || len(mdhd) < 24 {
 			t.Fatalf("%s: short tkhd/mdhd", path)
 		}
@@ -613,9 +615,13 @@ func videoTrack(t *testing.T, path string) mp4Track {
 		} else {
 			track.timescale = binary.BigEndian.Uint32(mdhd[12:])
 		}
-		stsd := descend(mdia, "minf", "stbl", "stsd")
-		for typ, entries := range childBoxes(stsd) {
-			config := childBoxes(entries[0][boxContainers[typ]:])
+		stsd := mp4Descend(mdia, "minf", "stbl", "stsd")
+		for typ, entries := range mp4Children(stsd) {
+			fields, ok := mp4Containers[typ]
+			if !ok || len(entries[0]) < fields {
+				continue
+			}
+			config := mp4Children(entries[0][fields:])
 			if hvcC := config["hvcC"]; len(hvcC) > 0 && len(hvcC[0]) > 12 {
 				track.codec, track.level = "hevc", int(hvcC[0][12])
 			}
@@ -632,15 +638,15 @@ func videoTrack(t *testing.T, path string) mp4Track {
 	return mp4Track{}
 }
 
-func segmentDecodeTime(t *testing.T, path string, trackID uint32) (uint64, bool) {
+func mp4DecodeTime(t *testing.T, path string, trackID uint32) (uint64, bool) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, moof := range childBoxes(data)["moof"] {
-		for _, traf := range childBoxes(moof)["traf"] {
-			boxes := childBoxes(traf)
+	for _, moof := range mp4Children(data)["moof"] {
+		for _, traf := range mp4Children(moof)["traf"] {
+			boxes := mp4Children(traf)
 			tfhd, tfdt := boxes["tfhd"], boxes["tfdt"]
 			if len(tfhd) == 0 || len(tfdt) == 0 || len(tfhd[0]) < 8 {
 				continue
