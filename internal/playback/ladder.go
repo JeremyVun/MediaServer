@@ -20,8 +20,8 @@ var ErrUnknownQuality = errors.New("unknown playback quality")
 //
 // Levels are the lowest that carry 60 fps at the rung's box: H.264 by MaxMBPS
 // (4.2, 3.2, 3.1, 3.1) and HEVC by MaxLumaSr (4.1, 4.0, 3.1, 3.0).
-// VideoToolbox stamps one step lower at 30 fps, and a declared level may
-// exceed the stream's but never fall short of it.
+// VideoToolbox stamps by box size alone (below these at both 30 and 60 fps),
+// and a declared level may exceed the stream's but never fall short of it.
 type Rung struct {
 	ID         string
 	BoxW       int

@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build server web dev test vet lint typecheck check clean deploy
+.PHONY: build server web dev test test-ladder vet lint typecheck check clean deploy
 
 ## build: production single binary (web app embedded)
 build: web
@@ -24,6 +24,10 @@ test: vet lint typecheck
 	go test ./...
 	cd web && npm run test
 	cd web && npm run build
+
+## test-ladder: real VideoToolbox ladder encodes (~2 min); run alone on this Mac
+test-ladder:
+	LADDER_INTEGRATION=1 go test ./internal/playback -run Ladder -count=1
 
 vet:
 	go vet ./...

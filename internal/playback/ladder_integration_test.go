@@ -58,8 +58,8 @@ var (
 // actually produces. Sources are generated once and every encode is reused
 // across the checks that can share it.
 func TestLadderRealFFmpeg(t *testing.T) {
-	if testing.Short() {
-		t.Skip("real encodes: about two minutes of VideoToolbox work")
+	if testing.Short() || os.Getenv("LADDER_INTEGRATION") == "" {
+		t.Skip("real encodes: about two minutes of VideoToolbox work; set LADDER_INTEGRATION=1 (make test-ladder)")
 	}
 	ffmpeg, ffprobe := ladderTools(t)
 	srcDir := t.TempDir()
