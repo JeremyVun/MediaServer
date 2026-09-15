@@ -18,11 +18,10 @@ var ErrUnknownQuality = errors.New("unknown playback quality")
 // video bitrate it encodes at, and the CODECS strings the multivariant playlist
 // declares. Boxes and bitrates are owner numbers (design decision 4).
 //
-// Levels are the lowest that carry 60 fps at the rung's box — H.264 by MaxMBPS
-// (4.2 needs 522k mb/s for 1080p60; 3.2 for 720p60; 3.1 for 480p60 and 360p60)
-// and HEVC by MaxLumaSr (4.1 for 1080p60; 4.0 for 720p60; 3.1 for 480p60; 3.0
-// for 360p60). VideoToolbox stamps one step lower at 30 fps; declaring higher
-// is allowed, declaring lower is not.
+// Levels are the lowest that carry 60 fps at the rung's box: H.264 by MaxMBPS
+// (4.2, 3.2, 3.1, 3.1) and HEVC by MaxLumaSr (4.1, 4.0, 3.1, 3.0).
+// VideoToolbox stamps one step lower at 30 fps, and a declared level may
+// exceed the stream's but never fall short of it.
 type Rung struct {
 	ID         string
 	BoxW       int
