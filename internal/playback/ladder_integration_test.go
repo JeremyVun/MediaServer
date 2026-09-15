@@ -86,19 +86,23 @@ func TestLadderRealFFmpeg(t *testing.T) {
 		times := ladderDecodeTimes(t, base)
 		reference := times[base.rungs[0].ID]
 		tolerance := 1 / landscape.fps
+		worst := 0.0
 		for _, rung := range base.rungs[1:] {
 			got := times[rung.ID]
 			if len(got) != len(reference) {
 				t.Fatalf("%s wrote %d segments, %s wrote %d", rung.ID, len(got), base.rungs[0].ID, len(reference))
 			}
 			for n := range reference {
-				if math.Abs(got[n]-reference[n]) > tolerance {
+				delta := math.Abs(got[n] - reference[n])
+				worst = math.Max(worst, delta)
+				if delta > tolerance {
 					t.Fatalf("segment %d tfdt: %s=%.6fs %s=%.6fs (tolerance %.6fs)",
 						n, rung.ID, got[n], base.rungs[0].ID, reference[n], tolerance)
 				}
 			}
 		}
-		t.Logf("%d segments aligned across %d rungs within %.4fs", len(reference), len(base.rungs), tolerance)
+		t.Logf("%d segments across %d rungs, worst tfdt spread %.3f ms (tolerance %.1f ms)",
+			len(reference), len(base.rungs), worst*1000, tolerance*1000)
 	})
 
 	t.Run("RestartLandsOnTheGrid", func(t *testing.T) {
