@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { usePlayItem } from '../api/queries.ts'
-import type { PlayRequest } from '../api/types.ts'
+import type { PlayRequest, Quality } from '../api/types.ts'
 import { useCapabilities } from './useCapabilities.ts'
 
 export function usePlaybackSession(
@@ -8,6 +8,7 @@ export function usePlaybackSession(
   fileID: number | null,
   subtitleStreamIndex: number | null,
   audioStreamIndex: number | null,
+  quality: Quality,
 ) {
   const capabilities = useCapabilities()
   const request = useMemo<PlayRequest>(
@@ -16,8 +17,9 @@ export function usePlaybackSession(
       capabilities,
       subtitle_stream_index: subtitleStreamIndex ?? undefined,
       audio_stream_index: audioStreamIndex ?? undefined,
+      quality,
     }),
-    [audioStreamIndex, capabilities, fileID, subtitleStreamIndex],
+    [audioStreamIndex, capabilities, fileID, quality, subtitleStreamIndex],
   )
   const query = usePlayItem(itemID, request)
   return { ...query, capabilities }

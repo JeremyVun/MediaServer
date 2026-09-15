@@ -119,11 +119,22 @@ export interface PlayCapabilities {
   native_hls: boolean
 }
 
+export type QualityRungID = '1080p' | '720p' | '480p' | '360p'
+
+export type Quality = 'original' | 'auto' | QualityRungID
+
+export interface QualityRung {
+  id: QualityRungID
+  width: number
+  height: number
+}
+
 export interface PlayRequest {
   file_id?: number
   capabilities: PlayCapabilities
   subtitle_stream_index?: number
   audio_stream_index?: number
+  quality?: Quality
 }
 
 export interface Subtitle {
@@ -141,9 +152,12 @@ export interface PlayResponse {
     | 'container_not_supported'
     | 'subtitle_burn_in'
     | 'audio_track_selection'
+    | 'quality'
   url: string
   session_id?: string
   subtitles: Subtitle[]
+  quality: Quality
+  qualities: QualityRung[]
 }
 
 export interface ProgressUpdate {
