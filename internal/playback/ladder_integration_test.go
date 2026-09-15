@@ -58,6 +58,9 @@ var (
 // actually produces. Sources are generated once and every encode is reused
 // across the checks that can share it.
 func TestLadderRealFFmpeg(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real encodes: about two minutes of VideoToolbox work")
+	}
 	ffmpeg, ffprobe := ladderTools(t)
 	srcDir := t.TempDir()
 	landscape := generateLadderSource(t, ffmpeg, srcDir, "landscape", 1920, 1080, 60, 901)
