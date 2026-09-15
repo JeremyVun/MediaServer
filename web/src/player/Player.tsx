@@ -32,10 +32,11 @@ import {
   useItem,
   useSaveProgress,
 } from '../api/queries.ts'
-import type { MediaStream } from '../api/types.ts'
+import type { MediaStream, Quality, QualityRung } from '../api/types.ts'
 import { formatClock } from '../lib/format.ts'
 import { parseResumeOverride } from '../lib/searchParams.ts'
 import { Button, IconButton, Menu, MenuItem } from '../ui/index.ts'
+import { readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
 import { usePlaybackSession } from './usePlaybackSession.ts'
 import {
   bufferedSegments,
@@ -70,6 +71,8 @@ type FullscreenDocument = Document & {
 
 // A seek badge flashed on double-tap; `nonce` restarts the fade timer.
 type SeekIndicator = { direction: -1 | 1; seconds: number; nonce: number }
+
+const NO_QUALITIES: QualityRung[] = []
 
 export function PlayerPage() {
   const params = useParams()
@@ -159,7 +162,12 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   // from the request and keeps direct play.
   const sessionAudioIndex =
     selectedAudio && selectedAudio.stream_index !== defaultAudio?.stream_index ? selectedAudio.stream_index : null
-  const session = usePlaybackSession(itemID, fileID, burnInSubtitleIndex, sessionAudioIndex)
+  // The *requested* quality: the remembered preference until the viewer picks
+  // another. The server may resolve it down for a smaller file, but that
+  // resolved value is never stored, so a remembered 1080p still applies to the
+  // next 1080p file.
+  const [requestedQuality, setRequestedQuality] = useState<Quality>(readStoredQuality)
+  const session = usePlaybackSession(itemID, fileID, burnInSubtitleIndex, sessionAudioIndex, requestedQuality)
   const { mutate: saveProgressMutate } = useSaveProgress(itemID)
 
   const [paused, setPaused] = useState(true)
@@ -168,6 +176,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
+  // Height of the frames playing now, from the video element's `resize` event —
+  // how Auto reports the size an HLS variant switch landed on.
+  const [playingHeight, setPlayingHeight] = useState(0)
   const [controlsVisible, setControlsVisible] = useState(true)
   const [fullscreen, setFullscreen] = useState(false)
   const [videoError, setVideoError] = useState(false)
@@ -365,6 +376,18 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     [audioOptions, defaultAudio, sessionAudioIndex],
   )
 
+  const selectQuality = useCallback(
+    (quality: Quality) => {
+      writeStoredQuality(quality)
+      if (quality !== requestedQuality) {
+        const video = videoRef.current
+        if (video && Number.isFinite(video.currentTime)) pendingSeek.current = video.currentTime
+      }
+      setRequestedQuality(quality)
+    },
+    [requestedQuality],
+  )
+
   const cycleSubtitles = useCallback(() => {
     if (subtitleOptions.length === 0) return
     const current = subtitleOptions.findIndex((stream) => stream.stream_index === selectedSubtitleIndex)
@@ -411,6 +434,11 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
             return
           }
           setVideoError(true)
+        })
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          // hls.js orders levels by bitrate; start on the one the server listed
+          // first, as Safari's native player does.
+          hls.startLevel = hls.firstLevel
         })
         hls.loadSource(session.data.url)
         hls.attachMedia(video)
@@ -657,6 +685,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     }
   }
 
+  const qualities = session.data?.qualities ?? NO_QUALITIES
+  const resolvedQuality = session.data?.quality ?? requestedQuality
+  const qualityLabel = resolveQualityLabel(resolvedQuality, qualities, playingHeight)
   const loading = item.isPending || session.isPending
   const error = item.isError || session.isError || videoError
 
@@ -696,8 +727,10 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
         onWaiting={showBuffering}
         onPlaying={clearBuffering}
         onCanPlay={clearBuffering}
+        onResize={(e) => setPlayingHeight(e.currentTarget.videoHeight)}
         onEmptied={() => {
           setBuffered([])
+          setPlayingHeight(0)
           clearBuffering()
         }}
         onPlay={() => setPaused(false)}
@@ -920,7 +953,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
             {formatClock(currentTime)} / {formatClock(duration)}
           </span>
           <span className="grow" />
-          {/* Audio + caption + speed: borderless, right-aligned, shown on every
+          {/* Audio, caption, speed and quality: borderless, right-aligned, shown on every
               device (seek is touch double-tap; there's no on-screen hints
               button). Audio only appears when there's a track to switch to. */}
           {audioOptions.length > 1 && (
@@ -1020,6 +1053,38 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
               </MenuItem>
             ))}
           </Menu>
+          {qualities.length > 0 && (
+            <Menu
+              aria-label="Quality"
+              onOpenChange={(open) => {
+                menuOpen.current = open
+                registerActivity()
+              }}
+              trigger={
+                <>
+                  {qualityLabel}
+                  <ChevronDown aria-hidden className="size-4" strokeWidth={1.75} />
+                </>
+              }
+              triggerClassName="text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center gap-1 rounded-md px-3 text-sm"
+            >
+              <MenuItem checked={resolvedQuality === 'auto'} onSelect={() => selectQuality('auto')}>
+                {resolvedQuality === 'auto' ? qualityLabel : 'Auto'}
+              </MenuItem>
+              <MenuItem checked={resolvedQuality === 'original'} onSelect={() => selectQuality('original')}>
+                Original
+              </MenuItem>
+              {qualities.map((rung) => (
+                <MenuItem
+                  key={rung.id}
+                  checked={resolvedQuality === rung.id}
+                  onSelect={() => selectQuality(rung.id)}
+                >
+                  {rung.id}
+                </MenuItem>
+              ))}
+            </Menu>
+          )}
           {airplaySupported && (
             <IconButton aria-label="AirPlay" onClick={showAirPlay}>
               <Cast aria-hidden className="size-5" strokeWidth={1.75} />
