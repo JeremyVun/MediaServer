@@ -100,7 +100,7 @@ func TestOfferedRungs(t *testing.T) {
 
 // A rotate flag is not probed, so ffmpeg autorotates a phone clip stored as
 // 1920x1080 to 1080x1920 and the landscape box fits it to 608x1080 (design
-// decision 4, known limit). The scale target, not the predicted size, is what
+// SPEC-BACKEND "Quality ladder", known limit). The scale target, not the predicted size, is what
 // the filter receives.
 func TestRungScaleTargetIsTheBoxClamp(t *testing.T) {
 	rungs := OfferedRungs(MediaFile{Width: 1920, Height: 800}, videoAndAudio)

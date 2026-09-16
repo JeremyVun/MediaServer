@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent, type PointerEvent } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import {
   Check,
@@ -825,16 +825,22 @@ function ContinueWatchingRow({ items, cardStyle }: { items: ItemSummary[]; cardS
   )
 }
 
-function ContinueCard({ item, cardStyle }: { item: ItemSummary; cardStyle: CardStyle }) {
+// thumb_url is versioned (?v= appears when the thumbnail lands, changes when
+// it regenerates), so a new URL means an earlier load failure no longer
+// applies: re-seed during render to remount the <img> and retry.
+function useThumbRetry(thumbUrl: string) {
   const [brokenThumb, setBrokenThumb] = useState(false)
-  // thumb_url is versioned (?v= appears when the thumbnail lands, changes when
-  // it regenerates) — a new URL means the failure no longer applies, so
-  // re-seed during render to remount the <img> and retry.
-  const [syncedThumbUrl, setSyncedThumbUrl] = useState(item.thumb_url)
-  if (item.thumb_url !== syncedThumbUrl) {
-    setSyncedThumbUrl(item.thumb_url)
+  const [syncedThumbUrl, setSyncedThumbUrl] = useState(thumbUrl)
+  if (thumbUrl !== syncedThumbUrl) {
+    setSyncedThumbUrl(thumbUrl)
     setBrokenThumb(false)
   }
+  const markThumbBroken = useCallback(() => setBrokenThumb(true), [])
+  return { brokenThumb, markThumbBroken }
+}
+
+function ContinueCard({ item, cardStyle }: { item: ItemSummary; cardStyle: CardStyle }) {
+  const { brokenThumb, markThumbBroken } = useThumbRetry(item.thumb_url)
   const progress = progressPercent(item.progress?.position_s, item.duration_s)
   // Match the library grid card exactly: Minimal overlays the title on the
   // thumbnail, Compact shows a title + metadata strip below. Reuses the same
@@ -857,7 +863,7 @@ function ContinueCard({ item, cardStyle }: { item: ItemSummary; cardStyle: CardS
           progress={progress}
           overlayTitle={overlayTitle}
           brokenThumb={brokenThumb}
-          onError={() => setBrokenThumb(true)}
+          onError={markThumbBroken}
         />
         {showMeta && <PosterMeta title={item.title} meta={meta} />}
       </Card>
@@ -886,14 +892,7 @@ function PosterCard({
   onEnterSelection: (id: number) => void
   onToggleSelect: (id: number, shiftRange: boolean) => void
 }) {
-  const [brokenThumb, setBrokenThumb] = useState(false)
-  // Same pattern as ContinueCard: a changed (versioned) thumb_url invalidates
-  // a previous load failure — retry instead of showing the placeholder forever.
-  const [syncedThumbUrl, setSyncedThumbUrl] = useState(item.thumb_url)
-  if (item.thumb_url !== syncedThumbUrl) {
-    setSyncedThumbUrl(item.thumb_url)
-    setBrokenThumb(false)
-  }
+  const { brokenThumb, markThumbBroken } = useThumbRetry(item.thumb_url)
   const progress = item.progress?.completed
     ? 100
     : progressPercent(item.progress?.position_s, item.duration_s)
@@ -973,7 +972,7 @@ function PosterCard({
               progress={progress}
               overlayTitle={overlayTitle}
               brokenThumb={brokenThumb}
-              onError={() => setBrokenThumb(true)}
+              onError={markThumbBroken}
             />
           </Link>
           {showMeta && (
@@ -990,7 +989,7 @@ function PosterCard({
             progress={progress}
             overlayTitle={overlayTitle}
             brokenThumb={brokenThumb}
-            onError={() => setBrokenThumb(true)}
+            onError={markThumbBroken}
           />
           {showMeta && <PosterMeta title={item.title} meta={meta} />}
         </Link>

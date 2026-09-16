@@ -50,7 +50,7 @@ func TestShutdownReapsFFmpeg(t *testing.T) {
 	// Serving the init segment starts the ffmpeg child.
 	req := httptest.NewRequest("GET", session.URL, nil)
 	rec := httptest.NewRecorder()
-	if err := mgr.ServeSegment(rec, req, session.ID, "init.mp4"); err != nil {
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "", "init.mp4"); err != nil {
 		t.Fatalf("serve init: %v", err)
 	}
 	if rec.Code != http.StatusOK {

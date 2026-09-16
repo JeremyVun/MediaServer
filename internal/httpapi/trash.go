@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/JeremyVun/MediaServer/internal/mediapath"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/JeremyVun/MediaServer/internal/events"
@@ -142,14 +142,19 @@ func (s *Server) trashPlans(w http.ResponseWriter, r *http.Request, item store.I
 		s.log.Error("list item files for trash", "item_id", item.ID, "error", err)
 		return nil, false
 	}
+	roots, err := s.rootsByID(r.Context())
+	if err != nil {
+		writeStoreError(w, err)
+		return nil, false
+	}
 	plans := make([]trashPlan, 0, len(files))
 	for _, file := range files {
-		root, err := s.store.GetRoot(r.Context(), file.RootID)
-		if err != nil {
-			writeStoreError(w, err)
+		root, ok := roots[file.RootID]
+		if !ok {
+			writeStoreError(w, store.ErrNotFound)
 			return nil, false
 		}
-		if !root.Attached || !root.Online || !dirExistsForHTTP(root.Path) {
+		if !root.Attached || !root.Online || !mediapath.DirExists(root.Path) {
 			writeError(w, http.StatusConflict, "root_offline", "root is offline")
 			return nil, false
 		}
@@ -162,7 +167,7 @@ func (s *Server) trashPlans(w http.ResponseWriter, r *http.Request, item store.I
 			writeError(w, http.StatusConflict, "file_unavailable", "file is not online")
 			return nil, false
 		}
-		livePath, err := mediaFilePath(root.Path, file.RelPath)
+		livePath, err := mediapath.SafeJoin(root.Path, file.RelPath)
 		if err != nil {
 			writeError(w, http.StatusConflict, "invalid_path", "file path is invalid")
 			return nil, false
@@ -261,15 +266,22 @@ func (s *Server) purgeItem(w http.ResponseWriter, ctx context.Context, item stor
 		}
 		return false
 	}
+	roots, err := s.rootsByID(ctx)
+	if err != nil {
+		if !skipUnavailable {
+			writeStoreError(w, err)
+		}
+		return false
+	}
 	for _, file := range files {
-		root, err := s.store.GetRoot(ctx, file.RootID)
-		if err != nil {
+		root, ok := roots[file.RootID]
+		if !ok {
 			if !skipUnavailable {
-				writeStoreError(w, err)
+				writeStoreError(w, store.ErrNotFound)
 			}
 			return false
 		}
-		if !root.Online || !dirExistsForHTTP(root.Path) {
+		if !root.Online || !mediapath.DirExists(root.Path) {
 			if !skipUnavailable {
 				writeError(w, http.StatusConflict, "root_offline", "root is offline")
 			}
@@ -301,22 +313,9 @@ func (s *Server) publishRemoved(itemID int64) {
 	}
 }
 
-func mediaFilePath(rootPath, relPath string) (string, error) {
-	rel := filepath.Clean(filepath.FromSlash(relPath))
-	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid relative media path %q", relPath)
-	}
-	return filepath.Join(rootPath, rel), nil
-}
-
 func trashedFilePath(rootPath string, file store.File) string {
 	name := filepath.Base(filepath.FromSlash(file.RelPath))
 	return filepath.Join(rootPath, trashDirName, fmt.Sprintf("%d_%s", file.ID, name))
-}
-
-func dirExistsForHTTP(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }
 
 func rollbackMoves(moved []movedFile) {

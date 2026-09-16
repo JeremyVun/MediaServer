@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +48,10 @@ type Manager struct {
 	// procs tracks the ffmpeg reaping goroutines so Shutdown can wait for
 	// every child process to actually exit before the server does.
 	procs sync.WaitGroup
+
+	// cacheDirty is set whenever a worker starts or stops writing; the prune
+	// tick only walks the cache while something is running or right after.
+	cacheDirty atomic.Bool
 }
 
 type Options struct {
@@ -130,6 +135,9 @@ func (m *Manager) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				m.reapIdle(time.Now())
+				if !m.cacheDirty.Swap(false) && !m.anyRunning() {
+					continue
+				}
 				if err := m.PruneCache(ctx); err != nil && ctx.Err() == nil {
 					m.log.Debug("prune hls cache", "error", err)
 				}
@@ -155,7 +163,6 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Session{}, fmt.Errorf("%w: %v", ErrCacheUnavailable, err)
 	}
-	_ = m.PruneCache(ctx)
 
 	var keyframes *keyframeIndex
 	if req.Decision.Tier == TierRemux || req.Decision.Tier == TierAudioTranscode {
@@ -183,6 +190,7 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 			log:             m.log,
 			videoSem:        m.videoSem,
 			procs:           &m.procs,
+			markWrite:       m.markCacheWrite,
 			keyframes:       keyframes,
 			segmentDuration: m.segmentDuration,
 			segmentWait:     m.segmentWait,
@@ -220,10 +228,6 @@ func (m *Manager) RungPlaylist(ctx context.Context, sid, rung string) (string, e
 	}
 	w.touch()
 	return w.rungPlaylist(rung)
-}
-
-func (m *Manager) ServeSegment(wr http.ResponseWriter, r *http.Request, sid, name string) error {
-	return m.ServeRungSegment(wr, r, sid, "", name)
 }
 
 func (m *Manager) ServeRungSegment(wr http.ResponseWriter, r *http.Request, sid, rung, name string) error {
@@ -324,6 +328,26 @@ func (m *Manager) PruneCache(ctx context.Context) error {
 		total -= entry.size
 	}
 	return ctx.Err()
+}
+
+func (m *Manager) markCacheWrite() { m.cacheDirty.Store(true) }
+
+func (m *Manager) anyRunning() bool {
+	m.mu.Lock()
+	workers := make([]*worker, 0, len(m.workers))
+	for _, w := range m.workers {
+		workers = append(workers, w)
+	}
+	m.mu.Unlock()
+	for _, w := range workers {
+		w.mu.Lock()
+		running := w.running
+		w.mu.Unlock()
+		if running {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) workerForSession(sid string) (*worker, error) {
@@ -457,6 +481,7 @@ type worker struct {
 	log       *slog.Logger
 	videoSem  chan struct{}
 	procs     *sync.WaitGroup
+	markWrite func()
 	keyframes *keyframeIndex
 
 	segmentDuration time.Duration
@@ -471,6 +496,12 @@ type worker struct {
 	lastAccess  time.Time
 	semHeld     bool
 	stderr      *tailBuffer
+}
+
+func (w *worker) noteWrite() {
+	if w.markWrite != nil {
+		w.markWrite()
+	}
 }
 
 func (w *worker) touch() {
@@ -535,12 +566,7 @@ func (w *worker) gridPlaylist() string {
 	}
 	count := w.segmentCount()
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n")
-	b.WriteString("#EXT-X-VERSION:7\n")
-	b.WriteString("#EXT-X-TARGETDURATION:" + strconv.Itoa(int(math.Ceil(w.segmentDuration.Seconds()))) + "\n")
-	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
-	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
-	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
+	writeMediaPlaylistHeader(&b, int(math.Ceil(w.segmentDuration.Seconds())))
 	for i := 0; i < count; i++ {
 		remaining := duration - float64(i)*w.segmentDuration.Seconds()
 		segDuration := math.Min(w.segmentDuration.Seconds(), remaining)
@@ -556,18 +582,22 @@ func (w *worker) gridPlaylist() string {
 
 func (w *worker) keyframePlaylist() string {
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n")
-	b.WriteString("#EXT-X-VERSION:7\n")
-	b.WriteString("#EXT-X-TARGETDURATION:" + strconv.Itoa(w.keyframes.targetDuration()) + "\n")
-	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
-	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
-	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
+	writeMediaPlaylistHeader(&b, w.keyframes.targetDuration())
 	for n := range w.keyframes.Starts {
 		b.WriteString("#EXTINF:" + strconv.FormatFloat(w.keyframes.segmentDuration(n), 'f', 6, 64) + ",\n")
 		b.WriteString(segmentName(n) + "\n")
 	}
 	b.WriteString("#EXT-X-ENDLIST\n")
 	return b.String()
+}
+
+func writeMediaPlaylistHeader(b *strings.Builder, targetDuration int) {
+	b.WriteString("#EXTM3U\n")
+	b.WriteString("#EXT-X-VERSION:7\n")
+	b.WriteString("#EXT-X-TARGETDURATION:" + strconv.Itoa(targetDuration) + "\n")
+	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
+	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
+	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")
 }
 
 func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, rung, name string) error {
@@ -695,6 +725,7 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	w.startNumber = startNumber
 	w.semHeld = semHeld
 	w.stderr = stderr
+	w.noteWrite()
 
 	if w.procs != nil {
 		w.procs.Add(1)
@@ -704,6 +735,7 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 			defer w.procs.Done()
 		}
 		err := cmd.Wait()
+		w.noteWrite()
 		if semHeld {
 			<-w.videoSem
 		}

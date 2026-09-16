@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react'
 import type Hls from 'hls.js'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
@@ -33,15 +34,13 @@ import {
   useSaveProgress,
 } from '../api/queries.ts'
 import type { MediaStream, Quality, QualityRung } from '../api/types.ts'
-import { formatClock } from '../lib/format.ts'
 import { parseResumeOverride } from '../lib/searchParams.ts'
 import { Button, IconButton, Menu, MenuItem } from '../ui/index.ts'
 import { readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
+import { Clock, SeekBar } from './SeekBar.tsx'
 import { usePlaybackSession } from './usePlaybackSession.ts'
 import {
-  bufferedSegments,
   clampSkip,
-  hoverTime,
   isDoubleTap,
   mouseClickDecision,
   pointerRoute,
@@ -174,7 +173,6 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const [muted, setMuted] = useState(false)
   const [volume, setVolume] = useState(1)
   const [duration, setDuration] = useState(0)
-  const [currentTime, setCurrentTime] = useState(0)
   const [playbackRate, setPlaybackRate] = useState(1)
   // Height of the frames playing now, from the video element's `resize` event —
   // how Auto reports the size an HLS variant switch landed on.
@@ -193,16 +191,11 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const [fullscreen, setFullscreen] = useState(false)
   const [videoError, setVideoError] = useState(false)
   const [seekIndicator, setSeekIndicator] = useState<SeekIndicator | null>(null)
-  // Buffered TimeRanges flattened to [start, end] second pairs; the seek bar
-  // renders them as a lighter segment behind the played portion.
-  const [buffered, setBuffered] = useState<Array<[number, number]>>([])
   // Spinner shown on `waiting` (playback stalled for lack of buffered frames),
   // debounced so routine seeks don't flash it. Deliberately NOT on `stalled`:
   // that's a network-idle event that fires during healthy playback once the
   // buffer fills, so it wrongly sticks the spinner on until the next pause/play.
   const [buffering, setBuffering] = useState(false)
-  // Desktop-only timestamp tooltip at the hovered seek-bar position.
-  const [hoverPreview, setHoverPreview] = useState<{ ratio: number; time: number } | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   const [airplaySupported] = useState(
     () => typeof HTMLVideoElement !== 'undefined' && 'webkitShowPlaybackTargetPicker' in HTMLVideoElement.prototype,
@@ -293,13 +286,24 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     video.currentTime = clampSkip(video.currentTime, delta, video.duration)
   }, [])
 
-  const readBuffered = useCallback((video: HTMLVideoElement) => {
-    const ranges: Array<[number, number]> = []
-    for (let i = 0; i < video.buffered.length; i++) {
-      ranges.push([video.buffered.start(i), video.buffered.end(i)])
-    }
-    setBuffered(ranges)
+  // Last position seen by `timeupdate` or a seek; advancing past it proves
+  // playback is progressing, which clears a pending buffer spinner.
+  const lastTime = useRef(0)
+
+  // Audio, subtitle and quality changes re-POST /play; the new stream resumes
+  // from here via onLoadedMetadata.
+  const rememberPosition = useCallback(() => {
+    const video = videoRef.current
+    if (video && Number.isFinite(video.currentTime)) pendingSeek.current = video.currentTime
   }, [])
+
+  const onMenuOpenChange = useCallback(
+    (open: boolean) => {
+      menuOpen.current = open
+      registerActivity()
+    },
+    [registerActivity],
+  )
 
   // Debounce the spinner ~250ms so a routine seek (which briefly fires
   // `waiting`) doesn't flash it; `canplay`/`playing`/`timeupdate` clear it.
@@ -363,13 +367,10 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       const next = subtitleOptions.find((stream) => stream.stream_index === streamIndex) ?? null
       const currentBurnIn = selectedSubtitle != null && isImageSubtitleCodec(selectedSubtitle.codec)
       const nextBurnIn = next != null && isImageSubtitleCodec(next.codec)
-      if (currentBurnIn || nextBurnIn) {
-        const video = videoRef.current
-        if (video && Number.isFinite(video.currentTime)) pendingSeek.current = video.currentTime
-      }
+      if (currentBurnIn || nextBurnIn) rememberPosition()
       setSelectedSubtitleIndex(streamIndex)
     },
-    [selectedSubtitle, subtitleOptions],
+    [rememberPosition, selectedSubtitle, subtitleOptions],
   )
 
   const selectAudio = useCallback(
@@ -377,25 +378,19 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       const next = audioOptions.find((stream) => stream.stream_index === streamIndex) ?? defaultAudio
       const nextSessionIndex =
         next && next.stream_index !== defaultAudio?.stream_index ? next.stream_index : null
-      if (nextSessionIndex !== sessionAudioIndex) {
-        const video = videoRef.current
-        if (video && Number.isFinite(video.currentTime)) pendingSeek.current = video.currentTime
-      }
+      if (nextSessionIndex !== sessionAudioIndex) rememberPosition()
       setSelectedAudioIndex(streamIndex)
     },
-    [audioOptions, defaultAudio, sessionAudioIndex],
+    [audioOptions, defaultAudio, rememberPosition, sessionAudioIndex],
   )
 
   const selectQuality = useCallback(
     (quality: Quality) => {
       writeStoredQuality(quality)
-      if (quality !== requestedQuality) {
-        const video = videoRef.current
-        if (video && Number.isFinite(video.currentTime)) pendingSeek.current = video.currentTime
-      }
+      if (quality !== requestedQuality) rememberPosition()
       setRequestedQuality(quality)
     },
-    [requestedQuality],
+    [rememberPosition, requestedQuality],
   )
 
   const cycleSubtitles = useCallback(() => {
@@ -725,21 +720,22 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           // spinner and it clears again the moment playback resumes. This is
           // the reliable "we're playing" signal; `canplay`/`playing` don't
           // re-fire mid-playback.
-          if (time !== currentTime) clearBuffering()
-          setCurrentTime(time)
+          if (time !== lastTime.current) clearBuffering()
+          lastTime.current = time
           const duration = e.currentTarget.duration
           if (Number.isFinite(duration) && duration > 0) {
             lastProgress.current = { position_s: time, duration_s: duration }
           }
         }}
         onDurationChange={(e) => setDuration(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
-        onProgress={(e) => readBuffered(e.currentTarget)}
+        onSeeking={(e) => {
+          lastTime.current = e.currentTarget.currentTime
+        }}
         onWaiting={showBuffering}
         onPlaying={clearBuffering}
         onCanPlay={clearBuffering}
         onResize={(e) => setPlayingHeight(e.currentTarget.videoHeight)}
         onEmptied={() => {
-          setBuffered([])
           setPlayingHeight(0)
           clearBuffering()
         }}
@@ -859,64 +855,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           controlsVisible || paused ? 'opacity-100' : 'pointer-events-none opacity-0',
         ].join(' ')}
       >
-        {/* Custom seek bar per DESIGN-SYSTEM player chrome: 4px base track,
-            buffered ranges lighter behind an amber played range, thumb on
-            hover/drag. The native range input stays on top (transparent track,
-            styled thumb) so keyboard/ARIA slider semantics are unchanged. */}
-        <div
-          className="relative mb-3 h-6"
-          onPointerMove={(e) => {
-            if (coarsePointer || !duration) return
-            const rect = e.currentTarget.getBoundingClientRect()
-            const ratio = rect.width > 0 ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) : 0
-            setHoverPreview({ ratio, time: hoverTime(e.clientX, rect.left, rect.width, duration) })
-          }}
-          onPointerLeave={() => setHoverPreview(null)}
-        >
-          <div
-            className="pointer-events-none absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 overflow-hidden rounded-full"
-            style={{ backgroundColor: 'rgb(255 255 255 / 0.25)' }}
-          >
-            {bufferedSegments(buffered, duration).map((segment, index) => (
-              <div
-                key={index}
-                className="absolute inset-y-0"
-                style={{
-                  left: `${segment.start * 100}%`,
-                  width: `${(segment.end - segment.start) * 100}%`,
-                  backgroundColor: 'rgb(255 255 255 / 0.45)',
-                }}
-              />
-            ))}
-            <div
-              className="bg-accent-fill absolute inset-y-0 left-0"
-              style={{ width: `${duration > 0 ? Math.min(1, currentTime / duration) * 100 : 0}%` }}
-            />
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step={0.1}
-            value={Math.min(currentTime, duration || currentTime)}
-            onChange={(e) => {
-              const video = videoRef.current
-              if (!video) return
-              video.currentTime = Number(e.currentTarget.value)
-              setCurrentTime(video.currentTime)
-            }}
-            aria-label="Seek"
-            className="relative z-10 block h-6 w-full cursor-pointer appearance-none bg-transparent focus-visible:outline-none [&::-moz-range-thumb]:size-3.5 [&::-moz-range-thumb]:appearance-none [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-moz-range-thumb]:opacity-0 [&::-moz-range-thumb]:transition-opacity [&::-moz-range-track]:h-1 [&::-moz-range-track]:rounded-full [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:h-1 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:mt-[-5px] [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:opacity-0 [&::-webkit-slider-thumb]:transition-opacity hover:[&::-moz-range-thumb]:opacity-100 hover:[&::-webkit-slider-thumb]:opacity-100 focus-visible:[&::-moz-range-thumb]:opacity-100 focus-visible:[&::-webkit-slider-thumb]:opacity-100 active:[&::-moz-range-thumb]:opacity-100 active:[&::-webkit-slider-thumb]:opacity-100"
-          />
-          {hoverPreview && (
-            <div
-              className="bg-raised/90 text-primary shadow-overlay tabular pointer-events-none absolute bottom-7 -translate-x-1/2 rounded-sm px-2 py-1 text-xs"
-              style={{ left: `${hoverPreview.ratio * 100}%` }}
-            >
-              {formatClock(hoverPreview.time)}
-            </div>
-          )}
-        </div>
+        <SeekBar videoRef={videoRef} duration={duration} coarsePointer={coarsePointer} />
         <div className="flex flex-wrap items-center gap-2">
           <IconButton aria-label={paused ? 'Play' : 'Pause'} onClick={togglePlay}>
             {paused ? (
@@ -959,20 +898,16 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
               />
             </>
           )}
-          <span className="tabular min-w-[104px] text-sm text-secondary">
-            {formatClock(currentTime)} / {formatClock(duration)}
-          </span>
+          <Clock videoRef={videoRef} duration={duration} />
           <span className="grow" />
           {/* Audio, caption, speed and quality: borderless, right-aligned, shown on every
               device (seek is touch double-tap; there's no on-screen hints
               button). Audio only appears when there's a track to switch to. */}
           {audioOptions.length > 1 && (
-            <Menu
-              aria-label="Audio track"
-              onOpenChange={(open) => {
-                menuOpen.current = open
-                registerActivity()
-              }}
+            <PlayerMenu
+              label="Audio track"
+              gap="gap-2"
+              onOpenChange={onMenuOpenChange}
               trigger={
                 <>
                   <AudioLines aria-hidden className="size-4 text-secondary" strokeWidth={1.75} />
@@ -986,7 +921,6 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                   )}
                 </>
               }
-              triggerClassName="text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center gap-2 rounded-md px-3 text-sm"
             >
               {audioOptions.map((stream) => (
                 <MenuItem
@@ -997,15 +931,13 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                   {audioOptionLabel(stream)}
                 </MenuItem>
               ))}
-            </Menu>
+            </PlayerMenu>
           )}
           {subtitleOptions.length > 0 && (
-            <Menu
-              aria-label="Subtitles"
-              onOpenChange={(open) => {
-                menuOpen.current = open
-                registerActivity()
-              }}
+            <PlayerMenu
+              label="Subtitles"
+              gap="gap-2"
+              onOpenChange={onMenuOpenChange}
               trigger={
                 <>
                   <Captions aria-hidden className="size-4 text-secondary" strokeWidth={1.75} />
@@ -1021,7 +953,6 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                   )}
                 </>
               }
-              triggerClassName="text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center gap-2 rounded-md px-3 text-sm"
             >
               <MenuItem checked={selectedSubtitle == null} onSelect={() => selectSubtitle(null)}>
                 Off
@@ -1035,21 +966,18 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                   {subtitleOptionLabel(stream)}
                 </MenuItem>
               ))}
-            </Menu>
+            </PlayerMenu>
           )}
-          <Menu
-            aria-label="Playback speed"
-            onOpenChange={(open) => {
-              menuOpen.current = open
-              registerActivity()
-            }}
+          <PlayerMenu
+            label="Playback speed"
+            gap="gap-1"
+            onOpenChange={onMenuOpenChange}
             trigger={
               <>
                 {playbackRate}x
                 <ChevronDown aria-hidden className="size-4" strokeWidth={1.75} />
               </>
             }
-            triggerClassName="text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center gap-1 rounded-md px-3 text-sm"
           >
             {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
               <MenuItem
@@ -1062,21 +990,18 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                 {rate}x
               </MenuItem>
             ))}
-          </Menu>
+          </PlayerMenu>
           {qualities.length > 0 && (
-            <Menu
-              aria-label="Quality"
-              onOpenChange={(open) => {
-                menuOpen.current = open
-                registerActivity()
-              }}
+            <PlayerMenu
+              label="Quality"
+              gap="gap-1"
+              onOpenChange={onMenuOpenChange}
               trigger={
                 <>
                   {qualityLabel}
                   <ChevronDown aria-hidden className="size-4" strokeWidth={1.75} />
                 </>
               }
-              triggerClassName="text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center gap-1 rounded-md px-3 text-sm"
             >
               <MenuItem checked={resolvedQuality === 'auto'} onSelect={() => selectQuality('auto')}>
                 {resolvedQuality === 'auto' ? qualityLabel : 'Auto'}
@@ -1093,7 +1018,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                   {rung.id}
                 </MenuItem>
               ))}
-            </Menu>
+            </PlayerMenu>
           )}
           {airplaySupported && (
             <IconButton aria-label="AirPlay" onClick={showAirPlay}>
@@ -1112,6 +1037,36 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
 
       {helpOpen && <KeyboardHelpSheet onClose={() => setHelpOpen(false)} />}
     </main>
+  )
+}
+
+const MENU_TRIGGER_CLASS =
+  'text-primary hover:bg-accent-subtle inline-flex h-11 cursor-pointer items-center rounded-md px-3 text-sm'
+
+// Control-bar menus share their trigger chrome and keep the auto-hide timer
+// informed while open. Icon+label triggers use gap-2, text-only ones gap-1.
+function PlayerMenu({
+  label,
+  gap,
+  onOpenChange,
+  trigger,
+  children,
+}: {
+  label: string
+  gap: 'gap-1' | 'gap-2'
+  onOpenChange: (open: boolean) => void
+  trigger: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <Menu
+      aria-label={label}
+      onOpenChange={onOpenChange}
+      trigger={trigger}
+      triggerClassName={`${MENU_TRIGGER_CLASS} ${gap}`}
+    >
+      {children}
+    </Menu>
   )
 }
 

@@ -230,7 +230,7 @@ func TestManagerSegmentTimelineIntegrity(t *testing.T) {
 		t.Helper()
 		req := httptest.NewRequest("GET", session.URL, nil)
 		rec := httptest.NewRecorder()
-		if err := mgr.ServeSegment(rec, req, session.ID, name); err != nil {
+		if err := mgr.ServeRungSegment(rec, req, session.ID, "", name); err != nil {
 			t.Fatalf("serve %s: %v", name, err)
 		}
 		if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
@@ -268,7 +268,7 @@ func TestManagerSegmentTimelineIntegrity(t *testing.T) {
 	// Beyond the playlist's advertised range is a 404, not a restart loop.
 	req := httptest.NewRequest("GET", session.URL, nil)
 	rec := httptest.NewRecorder()
-	if err := mgr.ServeSegment(rec, req, session.ID, "seg-00002.m4s"); !errors.Is(err, ErrNotFound) {
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "", "seg-00002.m4s"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("segment past end error = %v, want ErrNotFound", err)
 	}
 }
@@ -359,7 +359,7 @@ func TestManagerServesGeneratedHLSSegment(t *testing.T) {
 
 	req := httptest.NewRequest("GET", session.URL, nil)
 	rec := httptest.NewRecorder()
-	if err := mgr.ServeSegment(rec, req, session.ID, "init.mp4"); err != nil {
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "", "init.mp4"); err != nil {
 		t.Fatalf("serve init: %v", err)
 	}
 	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
@@ -368,7 +368,7 @@ func TestManagerServesGeneratedHLSSegment(t *testing.T) {
 
 	req = httptest.NewRequest("GET", session.URL, nil)
 	rec = httptest.NewRecorder()
-	if err := mgr.ServeSegment(rec, req, session.ID, "seg-00000.m4s"); err != nil {
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "", "seg-00000.m4s"); err != nil {
 		t.Fatalf("serve segment: %v", err)
 	}
 	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
@@ -430,7 +430,7 @@ func TestManagerLadderPlaylistsAndRungRoutes(t *testing.T) {
 	if err := mgr.ServeRungSegment(rec, req, session.ID, "1440p", "seg-00000.m4s"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown rung segment error = %v, want ErrNotFound", err)
 	}
-	if err := mgr.ServeSegment(rec, req, session.ID, "seg-00000.m4s"); !errors.Is(err, ErrNotFound) {
+	if err := mgr.ServeRungSegment(rec, req, session.ID, "", "seg-00000.m4s"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("flat segment on a ladder error = %v, want ErrNotFound", err)
 	}
 }

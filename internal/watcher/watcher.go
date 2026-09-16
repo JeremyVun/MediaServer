@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/JeremyVun/MediaServer/internal/mediapath"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -132,7 +133,7 @@ func (m *Manager) AttachRoot(ctx context.Context, root store.Root) error {
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
 
-	if !dirExists(root.Path) {
+	if !mediapath.DirExists(root.Path) {
 		m.stopRoot(root.ID)
 		return m.setRootOnline(ctx, root, false)
 	}
@@ -222,7 +223,7 @@ func (m *Manager) syncRoots(ctx context.Context, startup bool) error {
 		return err
 	}
 	for _, root := range roots {
-		online := dirExists(root.Path)
+		online := mediapath.DirExists(root.Path)
 		wasOnline := root.Online
 		switch {
 		case online:
@@ -274,7 +275,7 @@ func (m *Manager) watchRoot(ctx context.Context, root store.Root) {
 	eventsCh, err := m.streamFactory(ctx, root.Path, m.streamLatency, m.log)
 	if err != nil {
 		m.log.Warn("watch root", "root_id", root.ID, "path", root.Path, "error", err)
-		if !dirExists(root.Path) {
+		if !mediapath.DirExists(root.Path) {
 			if setErr := m.setRootOnline(context.Background(), root, false); setErr != nil {
 				m.log.Error("mark root offline after watch failure", "root_id", root.ID, "error", setErr)
 			}
@@ -481,7 +482,7 @@ func (rw *rootWatcher) handlePath(ctx context.Context, path string) {
 		rw.manager.enqueueReconcile(ctx, rw.root.ID)
 		return
 	}
-	if !info.Mode().IsRegular() || !isVideoPath(rel) {
+	if !info.Mode().IsRegular() || !mediapath.IsVideoPath(rel) {
 		return
 	}
 	// One waiter per path: it re-stats until the file settles, so further
@@ -591,7 +592,7 @@ func (rw *rootWatcher) filePathStillExists(ctx context.Context, file store.File)
 	if err != nil || !root.Online {
 		return false
 	}
-	path, err := safeJoin(root.Path, file.RelPath)
+	path, err := mediapath.SafeJoin(root.Path, file.RelPath)
 	if err != nil {
 		return false
 	}
@@ -600,7 +601,7 @@ func (rw *rootWatcher) filePathStillExists(ctx context.Context, file store.File)
 }
 
 func (rw *rootWatcher) handleRemoved(ctx context.Context, rel, path string) {
-	if !isVideoPath(rel) {
+	if !mediapath.IsVideoPath(rel) {
 		return
 	}
 	timer := time.NewTimer(rw.manager.moveWindow)
@@ -630,11 +631,6 @@ func (rw *rootWatcher) handleRemoved(ctx context.Context, rel, path string) {
 	rw.manager.publishItemUpdated(ctx, file.ItemID)
 }
 
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
-}
-
 func relPath(rootPath, path string) (string, error) {
 	rel, err := filepath.Rel(rootPath, path)
 	if err != nil {
@@ -661,15 +657,6 @@ func ignoredRel(rel string) bool {
 	return false
 }
 
-func isVideoPath(path string) bool {
-	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(path), ".")) {
-	case "mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m2ts", "wmv", "flv":
-		return true
-	default:
-		return false
-	}
-}
-
 func canOpen(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -677,14 +664,6 @@ func canOpen(path string) bool {
 	}
 	_ = f.Close()
 	return true
-}
-
-func safeJoin(rootPath, rel string) (string, error) {
-	clean := filepath.Clean(filepath.FromSlash(rel))
-	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
-		return "", fmt.Errorf("invalid relative path %q", rel)
-	}
-	return filepath.Join(rootPath, clean), nil
 }
 
 func withDefault(value, fallback time.Duration) time.Duration {

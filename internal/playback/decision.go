@@ -61,7 +61,7 @@ type Decision struct {
 	AudioPick *Stream
 	VideoCopy bool
 	AudioCopy bool
-	// Quality is the resolved request (design decision 3); Rungs is the ladder
+	// Quality is the resolved request (SPEC-API "Playback"); Rungs is the ladder
 	// it encodes, empty for every non-ladder tier.
 	Quality string
 	Rungs   []RungOutput

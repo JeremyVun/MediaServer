@@ -16,7 +16,7 @@ var ErrUnknownQuality = errors.New("unknown playback quality")
 
 // Rung is one step of the quality ladder: a box the output is fitted into, the
 // video bitrate it encodes at, and the CODECS strings the multivariant playlist
-// declares. Boxes and bitrates are owner numbers (design decision 4).
+// declares. Boxes and bitrates are owner numbers (SPEC-BACKEND "Quality ladder").
 //
 // Levels are the lowest that carry 60 fps at the rung's box: H.264 by MaxMBPS
 // (4.2, 3.2, 3.1, 3.1) and HEVC by MaxLumaSr (4.1, 4.0, 3.1, 3.0).
@@ -50,8 +50,8 @@ const (
 )
 
 // RungOutput is an offered rung with the size this file encodes to. ScaleW and
-// ScaleH are the scale filter's target box (min(box, source) per design
-// decision 4), which differs from the output whenever the aspect ratios do.
+// ScaleH are the scale filter's target box (min(box, source) per
+// SPEC-BACKEND "Quality ladder"), which differs from the output whenever the aspect ratios do.
 type RungOutput struct {
 	ID       string `json:"id"`
 	Width    int    `json:"width"`
@@ -90,7 +90,7 @@ func OfferedRungs(file MediaFile, streams []Stream) []RungOutput {
 // ResolveQuality turns a requested quality into the one the server will serve.
 // A fixed size the file does not offer resolves down to the largest offered
 // rung below it, and a file that offers nothing resolves everything to
-// original (design decision 3).
+// original (SPEC-BACKEND "Quality ladder").
 func ResolveQuality(requested string, offered []RungOutput) (string, error) {
 	switch requested {
 	case "", QualityOriginal:

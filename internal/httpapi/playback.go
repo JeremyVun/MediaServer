@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/JeremyVun/MediaServer/internal/mediapath"
 	"io"
 	"mime"
 	"net/http"
@@ -68,7 +69,7 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	mediaPath, err := safeJoin(root.Path, file.RelPath)
+	mediaPath, err := mediapath.SafeJoin(root.Path, file.RelPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "invalid media path")
 		s.log.Error("invalid media path", "file_id", file.ID, "rel_path", file.RelPath, "error", err)
@@ -171,7 +172,7 @@ func (s *Server) handleFileStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "root_offline", "file is not available")
 		return
 	}
-	path, err := safeJoin(root.Path, file.RelPath)
+	path, err := mediapath.SafeJoin(root.Path, file.RelPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "invalid media path")
 		s.log.Error("invalid media path", "file_id", file.ID, "rel_path", file.RelPath, "error", err)
@@ -275,7 +276,7 @@ func (s *Server) handleFileSubtitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "root_offline", "file is not available")
 		return
 	}
-	mediaPath, err := safeJoin(root.Path, file.RelPath)
+	mediaPath, err := mediapath.SafeJoin(root.Path, file.RelPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "invalid media path")
 		s.log.Error("invalid subtitle media path", "file_id", file.ID, "rel_path", file.RelPath, "error", err)
@@ -345,13 +346,18 @@ func (s *Server) playableFile(w http.ResponseWriter, r *http.Request, itemID int
 		s.log.Error("list playable files", "item_id", itemID, "error", err)
 		return store.File{}, store.Root{}, false
 	}
+	roots, err := s.rootsByID(r.Context())
+	if err != nil {
+		writeStoreError(w, err)
+		return store.File{}, store.Root{}, false
+	}
 	for _, file := range files {
 		if requested != nil && file.ID != *requested {
 			continue
 		}
-		root, err := s.store.GetRoot(r.Context(), file.RootID)
-		if err != nil {
-			writeStoreError(w, err)
+		root, ok := roots[file.RootID]
+		if !ok {
+			writeStoreError(w, store.ErrNotFound)
 			return store.File{}, store.Root{}, false
 		}
 		if file.Status == "online" && root.Online {

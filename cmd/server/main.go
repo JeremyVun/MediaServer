@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/JeremyVun/MediaServer/internal/mediapath"
 	"log/slog"
 	"net"
 	"net/http"
@@ -90,7 +91,7 @@ func run() error {
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("read settings: %w", err)
 	}
-	if !dirExists(hlsCacheDir) {
+	if !mediapath.DirExists(hlsCacheDir) {
 		logger.Warn("hls cache dir unavailable (volume not mounted); transcoded playback waits for it", "dir", hlsCacheDir)
 	}
 	playbackManager := playback.NewManager(playback.Options{
@@ -241,7 +242,7 @@ func seedRoots(ctx context.Context, cfg config.Config, st *store.Store, logger *
 		if err != nil {
 			return fmt.Errorf("seed root %q: %w", rc.Name, err)
 		}
-		online := dirExists(rc.Path)
+		online := mediapath.DirExists(rc.Path)
 		if err := st.SetRootOnline(ctx, root.ID, online); err != nil {
 			return fmt.Errorf("seed root %q: %w", rc.Name, err)
 		}
@@ -252,11 +253,6 @@ func seedRoots(ctx context.Context, cfg config.Config, st *store.Store, logger *
 		}
 	}
 	return nil
-}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }
 
 // checkTools fails startup with a clear message when ffmpeg/ffprobe are

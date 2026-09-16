@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"github.com/JeremyVun/MediaServer/internal/mediapath"
 	"net/http"
 	"os"
 
@@ -170,11 +171,11 @@ func (s *Server) catalogUnprobedFile(w http.ResponseWriter, r *http.Request, roo
 		writeStoreError(w, err)
 		return store.Item{}, false
 	}
-	if !root.Attached || !root.Online || !dirExistsForHTTP(root.Path) {
+	if !root.Attached || !root.Online || !mediapath.DirExists(root.Path) {
 		writeError(w, http.StatusConflict, "root_offline", "root is offline")
 		return store.Item{}, false
 	}
-	path, err := mediaFilePath(root.Path, relPath)
+	path, err := mediapath.SafeJoin(root.Path, relPath)
 	if err != nil {
 		writeError(w, http.StatusConflict, "invalid_path", "file path is invalid")
 		return store.Item{}, false

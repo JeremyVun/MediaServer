@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/JeremyVun/MediaServer/internal/mediapath"
 	"io/fs"
 	"log/slog"
 	"math"
@@ -335,7 +336,7 @@ func (m *Manager) handleReconcile(ctx context.Context, rootID int64) error {
 		if path != root.Path && d.IsDir() && isIgnoredDir(d.Name()) {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || strings.HasPrefix(d.Name(), ".") || !isVideoPath(d.Name()) {
+		if d.IsDir() || strings.HasPrefix(d.Name(), ".") || !mediapath.IsVideoPath(d.Name()) {
 			return nil
 		}
 		info, err := d.Info()
@@ -424,7 +425,7 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 	if !root.Online {
 		return Permanent(fmt.Errorf("root %d is offline", root.ID))
 	}
-	mediaPath, err := safeJoin(root.Path, relPath)
+	mediaPath, err := mediapath.SafeJoin(root.Path, relPath)
 	if err != nil {
 		return Permanent(err)
 	}
@@ -554,7 +555,7 @@ func (m *Manager) handleThumbnail(ctx context.Context, fileID int64) error {
 	if !root.Online || file.Status != "online" {
 		return Permanent(fmt.Errorf("file %d is not online", file.ID))
 	}
-	mediaPath, err := safeJoin(root.Path, file.RelPath)
+	mediaPath, err := mediapath.SafeJoin(root.Path, file.RelPath)
 	if err != nil {
 		return Permanent(err)
 	}
@@ -632,7 +633,7 @@ func (m *Manager) purgeTrashedItem(ctx context.Context, itemID int64) (bool, err
 		if err != nil {
 			return false, err
 		}
-		if !root.Online || !dirExists(root.Path) {
+		if !root.Online || !mediapath.DirExists(root.Path) {
 			return false, nil
 		}
 		if err := os.Remove(trashedFilePath(root.Path, file)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -657,7 +658,7 @@ func (m *Manager) purgeStaleUpload(ctx context.Context, upload store.Upload) (bo
 	if err != nil {
 		return false, err
 	}
-	if !root.Online || !dirExists(root.Path) {
+	if !root.Online || !mediapath.DirExists(root.Path) {
 		return false, nil
 	}
 	partPath := filepath.Join(root.Path, "incoming", ".uploads", upload.ID+".part")
@@ -684,11 +685,6 @@ func (m *Manager) rootReconcileLock(rootID int64) *sync.Mutex {
 func trashedFilePath(rootPath string, file store.File) string {
 	name := filepath.Base(filepath.FromSlash(file.RelPath))
 	return filepath.Join(rootPath, ".trash", fmt.Sprintf("%d_%s", file.ID, name))
-}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
 }
 
 func (m *Manager) moveByFingerprint(ctx context.Context, targetRoot store.Root, relPath string, info fs.FileInfo, fingerprint string) (bool, error) {
@@ -721,7 +717,7 @@ func (m *Manager) filePathExists(ctx context.Context, file store.File) bool {
 	if err != nil || !root.Online {
 		return false
 	}
-	path, err := safeJoin(root.Path, file.RelPath)
+	path, err := mediapath.SafeJoin(root.Path, file.RelPath)
 	if err != nil {
 		return false
 	}
@@ -811,21 +807,4 @@ func truncateError(message string) string {
 
 func isIgnoredDir(name string) bool {
 	return strings.HasPrefix(name, ".")
-}
-
-func isVideoPath(name string) bool {
-	switch strings.ToLower(strings.TrimPrefix(filepath.Ext(name), ".")) {
-	case "mp4", "m4v", "mov", "mkv", "webm", "avi", "ts", "m2ts", "wmv", "flv":
-		return true
-	default:
-		return false
-	}
-}
-
-func safeJoin(rootPath, relPath string) (string, error) {
-	rel := filepath.Clean(filepath.FromSlash(relPath))
-	if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
-		return "", fmt.Errorf("invalid relative media path %q", relPath)
-	}
-	return filepath.Join(rootPath, rel), nil
 }

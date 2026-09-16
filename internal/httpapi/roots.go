@@ -323,3 +323,17 @@ func pathContains(parent, child string) bool {
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
+
+// rootsByID loads the handful of roots once, so loops over an item's files
+// resolve each file's root with a map lookup instead of a query.
+func (s *Server) rootsByID(ctx context.Context) (map[int64]store.Root, error) {
+	roots, err := s.store.ListRoots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]store.Root, len(roots))
+	for _, root := range roots {
+		byID[root.ID] = root
+	}
+	return byID, nil
+}
