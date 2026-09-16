@@ -723,8 +723,9 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	return nil
 }
 
-// videoEncodingTier gates transcode.max_concurrent. A ladder holds one slot
-// however many rungs its single ffmpeg encodes.
+// videoEncodingTier covers the tiers that re-encode video: they carry the 4 s
+// forced keyframes and are the only ones that take a transcode.max_concurrent
+// slot. A ladder holds one slot however many rungs its single ffmpeg encodes.
 func videoEncodingTier(tier string) bool {
 	return tier == TierFullTranscode || tier == TierLadder
 }
