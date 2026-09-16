@@ -111,6 +111,7 @@ export interface ItemDetail {
   updated_at: string
   deleted_at: string | null
   collection_ids: number[]
+  thumb_url: string
   progress?: Progress
   files: MediaFile[]
 }
@@ -132,7 +133,7 @@ export interface PlayCapabilities {
 
 export type QualityRungID = '1080p' | '720p' | '480p' | '360p'
 
-export type Quality = 'original' | 'auto' | QualityRungID
+export type Quality = 'original' | 'auto' | 'audio' | QualityRungID
 
 export interface QualityRung {
   id: QualityRungID
@@ -169,6 +170,7 @@ export interface PlayResponse {
   subtitles: Subtitle[]
   quality: Quality
   qualities: QualityRung[]
+  audio_only: boolean
 }
 
 export interface ProgressUpdate {

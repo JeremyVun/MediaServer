@@ -7,6 +7,7 @@ export type { Quality }
 
 const STORAGE_KEY = 'playerQuality'
 const DEFAULT_QUALITY: Quality = 'original'
+// No 'audio': Audio only is never remembered, so a stored one reads as the default.
 const QUALITY_VALUES: Quality[] = ['auto', 'original', '1080p', '720p', '480p', '360p']
 const VALID = new Set<string>(QUALITY_VALUES)
 
@@ -17,6 +18,14 @@ export function readStoredQuality(): Quality {
 
 export function writeStoredQuality(quality: Quality): void {
   localStorage.setItem(STORAGE_KEY, quality)
+}
+
+/**
+ * The requested quality to carry into another item. Audio only is a per-listen
+ * pick that is never stored, so it falls back to the remembered preference.
+ */
+export function qualityAfterItemChange(requested: Quality, stored: Quality): Quality {
+  return requested === 'audio' ? stored : requested
 }
 
 /** The offered rung closest in height to the frame playing now, or null. */
@@ -39,6 +48,7 @@ export function resolveQualityLabel(
   playingHeight: number,
 ): string {
   if (resolved === 'original') return 'Original'
+  if (resolved === 'audio') return 'Audio only'
   if (resolved !== 'auto') return resolved
   const rung = nearestRung(qualities, playingHeight)
   return rung ? `Auto (${rung.id})` : 'Auto'

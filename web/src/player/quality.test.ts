@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Quality, QualityRung } from '../api/types.ts'
-import { nearestRung, readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
+import {
+  nearestRung,
+  qualityAfterItemChange,
+  readStoredQuality,
+  resolveQualityLabel,
+  writeStoredQuality,
+} from './quality.ts'
 
 // vitest runs in the node environment, so the tests supply the storage.
 function stubStorage(stored?: string): Map<string, string> {
@@ -35,6 +41,7 @@ describe('readStoredQuality', () => {
     ['unknown value', 'ultra', 'original'],
     ['wrong case', '1080P', 'original'],
     ['dropped rung', '240p', 'original'],
+    ['audio', 'audio', 'original'],
     ['object prototype key', 'toString', 'original'],
   ]
   it.each(cases)('%s reads as %s', (_name, stored, expected) => {
@@ -79,6 +86,21 @@ describe('nearestRung', () => {
   })
 })
 
+describe('qualityAfterItemChange', () => {
+  const cases: Array<[string, Quality, Quality, Quality]> = [
+    ['audio falls back to the stored preference', 'audio', '720p', '720p'],
+    ['audio falls back to a stored auto', 'audio', 'auto', 'auto'],
+    ['audio falls back to the default', 'audio', 'original', 'original'],
+    ['auto is kept', 'auto', '720p', 'auto'],
+    ['original is kept', 'original', '1080p', 'original'],
+    ['a fixed rung is kept', '480p', 'original', '480p'],
+    ['a fixed rung is kept over a differing store', '1080p', '360p', '1080p'],
+  ]
+  it.each(cases)('%s', (_name, requested, stored, expected) => {
+    expect(qualityAfterItemChange(requested, stored)).toBe(expected)
+  })
+})
+
 describe('resolveQualityLabel', () => {
   const cases: Array<[string, Quality, QualityRung[], number, string]> = [
     ['auto names the size playing now', 'auto', LADDER, 720, 'Auto (720p)'],
@@ -88,6 +110,8 @@ describe('resolveQualityLabel', () => {
     ['original ignores the rungs', 'original', LADDER, 1080, 'Original'],
     ['fixed 1080p', '1080p', LADDER, 1080, '1080p'],
     ['fixed 480p resolved down', '480p', LADDER, 1080, '480p'],
+    ['audio only', 'audio', LADDER, 0, 'Audio only'],
+    ['audio only ignores a stale frame height', 'audio', LADDER, 1080, 'Audio only'],
   ]
   it.each(cases)('%s', (_name, resolved, qualities, playingHeight, expected) => {
     expect(resolveQualityLabel(resolved, qualities, playingHeight)).toBe(expected)
