@@ -88,6 +88,11 @@ func TestLibraryListSearchDetailAndThumb(t *testing.T) {
 	if detail.ID != item.ID || len(detail.Files) != 1 || len(detail.Files[0].Streams) != 2 {
 		t.Fatalf("detail = %+v", detail)
 	}
+	// The player only loads the detail shape, so it carries the same
+	// versioned thumb URL the list does.
+	if detail.ThumbURL != thumbURL {
+		t.Fatalf("detail thumb_url = %q, want %q", detail.ThumbURL, thumbURL)
+	}
 
 	// Versioned URLs are immutable-cacheable; unversioned ones (collections'
 	// thumb_urls) must revalidate.
@@ -128,6 +133,17 @@ func TestThumbNotReady(t *testing.T) {
 	}
 	if want := "/api/items/" + strconv.FormatInt(item.ID, 10) + "/thumb"; list.Items[0].ThumbURL != want {
 		t.Fatalf("thumb_url = %q, want %q", list.Items[0].ThumbURL, want)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/items/"+strconv.FormatInt(item.ID, 10), nil)
+	srv.Handler().ServeHTTP(rec, req)
+	var detail itemDetailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if want := "/api/items/" + strconv.FormatInt(item.ID, 10) + "/thumb"; detail.ThumbURL != want {
+		t.Fatalf("detail thumb_url = %q, want %q", detail.ThumbURL, want)
 	}
 
 	rec = httptest.NewRecorder()
