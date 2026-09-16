@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mediaSessionMetadata } from './mediaSession.ts'
+import { mediaSessionMetadata, thumbnailGenerated } from './mediaSession.ts'
 
 const ORIGIN = 'http://mini.local:8484'
 
@@ -20,5 +20,18 @@ describe('mediaSessionMetadata', () => {
   it('types the artwork as jpeg', () => {
     const metadata = mediaSessionMetadata('Dune', '/api/items/7/thumb?v=3', ORIGIN)
     expect(metadata.artwork).toEqual([{ src: `${ORIGIN}/api/items/7/thumb?v=3`, type: 'image/jpeg' }])
+  })
+})
+
+describe('thumbnailGenerated', () => {
+  const cases: Array<[string, string | undefined, boolean]> = [
+    ['versioned URL', '/api/items/7/thumb?v=3', true],
+    ['bare URL — the server answers 416 until the thumbnail exists', '/api/items/7/thumb', false],
+    ['another query parameter is not a version', '/api/items/7/thumb?size=large', false],
+    ['empty thumb_url', '', false],
+    ['item not loaded yet', undefined, false],
+  ]
+  it.each(cases)('%s', (_name, thumbURL, generated) => {
+    expect(thumbnailGenerated(thumbURL)).toBe(generated)
   })
 })

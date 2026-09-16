@@ -36,6 +36,7 @@ import type { MediaStream, Quality, QualityRung } from '../api/types.ts'
 import { formatClock } from '../lib/format.ts'
 import { parseResumeOverride } from '../lib/searchParams.ts'
 import { Button, IconButton, Menu, MenuItem } from '../ui/index.ts'
+import { AudioOnlyBackdrop } from './AudioOnlyBackdrop.tsx'
 import { mediaSessionMetadata } from './mediaSession.ts'
 import { qualityAfterItemChange, readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
 import { usePlaybackSession } from './usePlaybackSession.ts'
@@ -806,6 +807,8 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           />
         ))}
       </video>
+
+      {resolvedQuality === 'audio' && <AudioOnlyBackdrop thumbURL={itemThumbURL} />}
 
       <div
         className={[
