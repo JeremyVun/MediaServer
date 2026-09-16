@@ -45,6 +45,7 @@ type itemDetailResponse struct {
 	CreatedAt     string            `json:"created_at"`
 	UpdatedAt     string            `json:"updated_at"`
 	DeletedAt     *string           `json:"deleted_at"`
+	ThumbURL      string            `json:"thumb_url"`
 	CollectionIDs []int64           `json:"collection_ids"`
 	Progress      *progressResponse `json:"progress,omitempty"`
 	Files         []fileResponse    `json:"files"`
@@ -263,7 +264,7 @@ func (s *Server) handleItemThumb(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusRequestedRangeNotSatisfiable, "thumbnail_not_ready", "thumbnail has not been generated yet")
 }
 
-func itemToDetailResponse(item store.Item, collectionIDs []int64, progress *store.Progress, files []fileResponse) itemDetailResponse {
+func itemToDetailResponse(item store.Item, thumbURL string, collectionIDs []int64, progress *store.Progress, files []fileResponse) itemDetailResponse {
 	return itemDetailResponse{
 		ID:            item.ID,
 		Type:          item.Type,
@@ -273,6 +274,7 @@ func itemToDetailResponse(item store.Item, collectionIDs []int64, progress *stor
 		CreatedAt:     item.CreatedAt,
 		UpdatedAt:     item.UpdatedAt,
 		DeletedAt:     item.DeletedAt,
+		ThumbURL:      thumbURL,
 		CollectionIDs: collectionIDs,
 		Progress:      progressToResponse(progress),
 		Files:         files,
@@ -308,7 +310,7 @@ func (s *Server) detailResponse(w http.ResponseWriter, r *http.Request, item sto
 		}
 		fileResponses = append(fileResponses, fileToResponse(file, streams))
 	}
-	return itemToDetailResponse(item, summary.CollectionIDs, progress, fileResponses), true
+	return itemToDetailResponse(item, s.thumbURL(summary), summary.CollectionIDs, progress, fileResponses), true
 }
 
 func progressToResponse(progress *store.Progress) *progressResponse {

@@ -63,13 +63,16 @@ func BuildFFmpegArgs(req FFmpegRequest) []string {
 	}
 	args = append(args, "-i", req.SourcePath)
 
-	if req.Decision.Tier == TierLadder {
+	switch req.Decision.Tier {
+	case TierLadder:
 		args = append(args, ladderEncodeArgs(req)...)
-	} else {
+	case TierAudioOnly:
+		args = append(args, audioOnlyArgs(req, seekS)...)
+	default:
 		args = append(args, singleOutputArgs(req)...)
 	}
 
-	if fixedGridTier(req.Decision.Tier) {
+	if videoEncodingTier(req.Decision.Tier) {
 		args = append(args, "-force_key_frames", fmt.Sprintf("expr:gte(t,n_forced*%d)", segmentSeconds))
 	}
 
@@ -126,10 +129,46 @@ func BuildFFmpegArgs(req FFmpegRequest) []string {
 	return args
 }
 
-// fixedGridTier covers the tiers that re-encode video onto the 4 s keyframe
-// grid. Copy tiers cut at source keyframes instead.
+// fixedGridTier covers the tiers the muxer cuts on the 4 s grid. Copy tiers cut
+// at source keyframes instead.
 func fixedGridTier(tier string) bool {
-	return tier == TierFullTranscode || tier == TierLadder
+	return tier == TierFullTranscode || tier == TierLadder || tier == TierAudioOnly
+}
+
+// audioOnlyArgs encodes the picked stream alone, mixed under silence that runs
+// to the container duration. The catalog records the container duration, so the
+// playlist advertises D/4 segments; a file whose audio ends early would stop
+// short of them and hang the player at the tail. The silence is amix's first
+// input because amix clocks its output from it, and asetpts lifts lavfi's
+// zero-based timestamps to the restart position so every run lands on the same
+// grid. normalize=0 keeps amix from attenuating the mix, and aformat pins the
+// output rate so the grid tolerance is one AAC frame at 48 kHz.
+func audioOnlyArgs(req FFmpegRequest, seekS float64) []string {
+	source := audioFilterInput(req.Decision)
+	convert := "aformat=sample_rates=48000:channel_layouts=stereo"
+	var args []string
+	graph := source + convert + "[a]"
+	// anullsrc is infinite, so duration=longest would never end without a
+	// padding window; a restart at or past the container end has none.
+	if pad := req.File.DurationS - seekS; pad > 0 {
+		args = append(args,
+			"-t", strconv.FormatFloat(pad, 'f', 3, 64),
+			"-f", "lavfi",
+			"-i", "anullsrc=r=48000:cl=stereo",
+		)
+		graph = "[1:a]asetpts=PTS+" + strconv.FormatFloat(seekS, 'f', 3, 64) + "/TB[s];" +
+			source + convert + "[a0];" +
+			"[s][a0]amix=inputs=2:normalize=0:duration=longest[a]"
+	}
+	args = append(args, "-filter_complex", graph, "-map", "[a]")
+	return append(args, audioTranscodeArgs()...)
+}
+
+func audioFilterInput(decision Decision) string {
+	if decision.AudioPick != nil {
+		return "[0:" + strconv.Itoa(decision.AudioPick.StreamIndex) + "]"
+	}
+	return "[0:a:0]"
 }
 
 func singleOutputArgs(req FFmpegRequest) []string {

@@ -10,6 +10,7 @@ import (
 const (
 	QualityOriginal = "original"
 	QualityAuto     = "auto"
+	QualityAudio    = "audio"
 )
 
 var ErrUnknownQuality = errors.New("unknown playback quality")
@@ -85,6 +86,21 @@ func OfferedRungs(file MediaFile, streams []Stream) []RungOutput {
 		})
 	}
 	return out
+}
+
+// AudioOnlyOffered reports whether the file can be served as audio alone: it
+// needs a video stream worth dropping and an audio stream to keep, so an audio
+// file is already audio and a silent video has nothing to send.
+func AudioOnlyOffered(offered []RungOutput, streams []Stream) bool {
+	if len(offered) == 0 {
+		return false
+	}
+	for _, st := range streams {
+		if st.Kind == "audio" {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveQuality turns a requested quality into the one the server will serve.

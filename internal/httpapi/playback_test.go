@@ -222,3 +222,81 @@ func TestRungRoutesRejectNonLadderSessions(t *testing.T) {
 		t.Fatalf("rung playlist on a flat session status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestPlayAudioOnly(t *testing.T) {
+	srv, st := newTestServer(t)
+	srv.playback = playback.NewManager(playback.Options{CacheDir: t.TempDir()})
+	ctx := context.Background()
+	item, _ := seedLadderItem(t, ctx, st)
+
+	rec, play := postPlay(t, srv, item.ID, "audio")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audio status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if play.Mode != "hls" || play.Reason == nil || *play.Reason != playback.ReasonQuality || play.Quality != "audio" {
+		t.Fatalf("audio play = %+v", play)
+	}
+	if !play.AudioOnly || len(play.Qualities) != 4 {
+		t.Fatalf("audio play = %+v, want audio_only with the file's video rungs", play)
+	}
+	if play.SessionID == nil || play.URL != "/api/sessions/"+*play.SessionID+"/master.m3u8" {
+		t.Fatalf("audio url = %q session=%v", play.URL, play.SessionID)
+	}
+
+	// The tier is a flat session: the master URL is the media playlist itself
+	// and the rung routes on it are 404, like every other flat session.
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", play.URL, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `#EXT-X-MAP:URI="init.mp4"`) {
+		t.Fatalf("audio playlist status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "#EXT-X-STREAM-INF") {
+		t.Fatalf("audio playlist is multivariant:\n%s", rec.Body.String())
+	}
+	for _, path := range []string{"/720p/stream.m3u8", "/720p/seg-00000.m4s"} {
+		rec = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/sessions/"+*play.SessionID+path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s on an audio session status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestPlayAudioOnlyNotOffered(t *testing.T) {
+	srv, st := newTestServer(t)
+	srv.playback = playback.NewManager(playback.Options{CacheDir: t.TempDir()})
+	ctx := context.Background()
+	item, file := seedLadderItem(t, ctx, st)
+
+	// A silent video has nothing to send as audio.
+	if err := st.ReplaceFileStreams(ctx, file.ID, []store.Stream{
+		{StreamIndex: 0, Kind: "video", Codec: "h264"},
+	}); err != nil {
+		t.Fatalf("streams: %v", err)
+	}
+	rec, silent := postPlay(t, srv, item.ID, "audio")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("silent status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if silent.Quality != "original" || silent.AudioOnly {
+		t.Fatalf("silent video play = %+v, want original without audio only", silent)
+	}
+
+	// An audio file is already audio.
+	channels := 2
+	if err := st.ReplaceFileStreams(ctx, file.ID, []store.Stream{
+		{StreamIndex: 0, Kind: "audio", Codec: "aac", Channels: &channels, IsDefault: true},
+	}); err != nil {
+		t.Fatalf("streams: %v", err)
+	}
+	rec, audio := postPlay(t, srv, item.ID, "audio")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audio file status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if audio.Quality != "original" || audio.AudioOnly {
+		t.Fatalf("audio file play = %+v, want original without audio only", audio)
+	}
+	if !strings.Contains(rec.Body.String(), `"audio_only":false`) {
+		t.Fatalf("audio_only missing from the response: %s", rec.Body.String())
+	}
+}

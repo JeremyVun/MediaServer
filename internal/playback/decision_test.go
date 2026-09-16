@@ -289,3 +289,154 @@ func TestProfileHashIgnoresMaxHeightForLadders(t *testing.T) {
 		t.Fatal("ladder and full transcode share a profile hash")
 	}
 }
+
+func TestDecideQualityAudioOnly(t *testing.T) {
+	video := MediaFile{ID: 1, Container: "mov", DurationS: 600, Width: 1920, Height: 1080}
+	caps := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 2160}
+
+	tests := []struct {
+		name        string
+		file        MediaFile
+		streams     []Stream
+		subtitle    *int
+		audio       *int
+		wantTier    string
+		wantQuality string
+		wantPick    int
+	}{
+		{
+			name: "offered alongside rungs",
+			file: video,
+			streams: []Stream{
+				{StreamIndex: 0, Kind: "video", Codec: "h264"},
+				{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+			},
+			wantTier: TierAudioOnly, wantQuality: QualityAudio, wantPick: 1,
+		},
+		{
+			name:        "silent video",
+			file:        video,
+			streams:     []Stream{{StreamIndex: 0, Kind: "video", Codec: "h264"}},
+			wantTier:    TierDirect,
+			wantQuality: QualityOriginal,
+			wantPick:    -1,
+		},
+		{
+			name:        "audio file",
+			file:        MediaFile{ID: 2, Container: "mp4", DurationS: 600},
+			streams:     []Stream{{StreamIndex: 0, Kind: "audio", Codec: "aac", IsDefault: true}},
+			wantTier:    TierDirect,
+			wantQuality: QualityOriginal,
+			wantPick:    -1,
+		},
+		{
+			name: "explicit pick",
+			file: video,
+			streams: []Stream{
+				{StreamIndex: 0, Kind: "video", Codec: "h264"},
+				{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+				{StreamIndex: 2, Kind: "audio", Codec: "eac3"},
+			},
+			audio:    intPtr(2),
+			wantTier: TierAudioOnly, wantQuality: QualityAudio, wantPick: 2,
+		},
+		{
+			// The other HLS tiers map 0:a:0, which is this file's second
+			// choice. This tier follows the default flag instead.
+			name: "default stream second in file order",
+			file: video,
+			streams: []Stream{
+				{StreamIndex: 0, Kind: "video", Codec: "h264"},
+				{StreamIndex: 1, Kind: "audio", Codec: "aac"},
+				{StreamIndex: 2, Kind: "audio", Codec: "aac", IsDefault: true},
+			},
+			wantTier: TierAudioOnly, wantQuality: QualityAudio, wantPick: 2,
+		},
+		{
+			name: "no default flag",
+			file: video,
+			streams: []Stream{
+				{StreamIndex: 0, Kind: "video", Codec: "h264"},
+				{StreamIndex: 1, Kind: "audio", Codec: "aac"},
+				{StreamIndex: 2, Kind: "audio", Codec: "aac"},
+			},
+			wantTier: TierAudioOnly, wantQuality: QualityAudio, wantPick: 1,
+		},
+		{
+			name: "image subtitle is ignored",
+			file: video,
+			streams: []Stream{
+				{StreamIndex: 0, Kind: "video", Codec: "h264"},
+				{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+				{StreamIndex: 2, Kind: "subtitle", Codec: "hdmv_pgs_subtitle"},
+			},
+			subtitle: intPtr(2),
+			wantTier: TierAudioOnly, wantQuality: QualityAudio, wantPick: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := DecideQuality(QualityAudio, tt.file, tt.streams, caps, tt.subtitle, tt.audio)
+			if err != nil {
+				t.Fatalf("DecideQuality(audio): %v", err)
+			}
+			if got.Tier != tt.wantTier || got.Quality != tt.wantQuality {
+				t.Fatalf("DecideQuality(audio) = tier=%q quality=%q, want tier=%q quality=%q",
+					got.Tier, got.Quality, tt.wantTier, tt.wantQuality)
+			}
+			if tt.wantTier != TierAudioOnly {
+				return
+			}
+			if got.Mode != ModeHLS || got.Reason != ReasonQuality || len(got.Rungs) != 0 || got.BurnIn != nil || got.VideoCopy || got.AudioCopy {
+				t.Fatalf("DecideQuality(audio) = %+v", got)
+			}
+			if got.AudioPick == nil || got.AudioPick.StreamIndex != tt.wantPick {
+				t.Fatalf("DecideQuality(audio) AudioPick = %+v, want stream %d", got.AudioPick, tt.wantPick)
+			}
+		})
+	}
+}
+
+// One cache entry per file and audio track: the audio tier encodes no video, so
+// the device profile and a burn-in pick cannot change its output.
+func TestProfileHashIgnoresDeviceForAudioOnly(t *testing.T) {
+	file := MediaFile{ID: 42, Container: "matroska", DurationS: 1234.5, Width: 1920, Height: 1080}
+	streams := []Stream{
+		{StreamIndex: 0, Kind: "video", Codec: "h264"},
+		{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+		{StreamIndex: 2, Kind: "subtitle", Codec: "hdmv_pgs_subtitle"},
+	}
+	phone := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 844, NativeHLS: true}
+	desktop := Capabilities{Containers: []string{"mp4", "matroska"}, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "opus"}, MaxHeight: 2160}
+
+	decide := func(caps Capabilities, subtitle, audio *int) (Decision, string) {
+		decision, err := DecideQuality(QualityAudio, file, streams, caps, subtitle, audio)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Tier != TierAudioOnly {
+			t.Fatalf("decided tier %q", decision.Tier)
+		}
+		return decision, ProfileHash(file, caps, decision, subtitle, audio)
+	}
+
+	_, base := decide(phone, nil, nil)
+	if _, other := decide(desktop, nil, nil); other != base {
+		t.Fatalf("audio-only hash varies with capabilities: %q vs %q", base, other)
+	}
+	if _, burnIn := decide(phone, intPtr(2), nil); burnIn != base {
+		t.Fatalf("audio-only hash varies with a burn-in pick: %q vs %q", base, burnIn)
+	}
+	if _, picked := decide(phone, nil, intPtr(1)); picked == base {
+		t.Fatal("audio-only hash ignores the audio track pick")
+	}
+
+	ladder, err := DecideQuality(QualityAuto, file, streams, phone, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ProfileHash(file, phone, ladder, nil, nil); got == base {
+		t.Fatal("the audio tier and the ladder share a profile hash")
+	}
+}

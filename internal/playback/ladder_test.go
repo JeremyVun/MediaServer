@@ -240,3 +240,25 @@ func firstVariantURI(playlist string) string {
 	}
 	return ""
 }
+
+func TestAudioOnlyOffered(t *testing.T) {
+	video := MediaFile{Width: 1920, Height: 1080}
+	tests := []struct {
+		name    string
+		file    MediaFile
+		streams []Stream
+		want    bool
+	}{
+		{name: "video with audio", file: video, streams: videoAndAudio, want: true},
+		{name: "silent video", file: video, streams: []Stream{{StreamIndex: 0, Kind: "video", Codec: "h264"}}},
+		{name: "audio file", streams: []Stream{{StreamIndex: 0, Kind: "audio", Codec: "aac"}}},
+		{name: "video without probed dimensions", streams: videoAndAudio},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AudioOnlyOffered(OfferedRungs(tt.file, tt.streams), tt.streams); got != tt.want {
+				t.Fatalf("AudioOnlyOffered = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
