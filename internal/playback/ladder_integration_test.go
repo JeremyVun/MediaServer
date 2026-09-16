@@ -698,3 +698,331 @@ func declaredCodecLevel(codecs string) (int, error) {
 	}
 	return 0, fmt.Errorf("no level in %q", codecs)
 }
+
+const (
+	audioRestartSegment    = 5
+	audioShortStreamSecond = 10
+	// audioGridTolerance is two AAC frames at 48 kHz: the encoder's priming
+	// puts a from-zero run's segments up to one and a half frames away from a
+	// restarted run's on the same grid slot.
+	audioGridTolerance = 2 * aacPrimingSeconds
+	// audioMaxKbps is 192 kbps plus container overhead and rate-control slack.
+	audioMaxKbps = 220
+	// audioSpeedFloor keeps the tier far enough above realtime that it never
+	// needs a transcode.max_concurrent slot.
+	audioSpeedFloor = 10
+)
+
+// TestLadderAudioOnlyRealFFmpeg drives the audio tier's argv through ffmpeg and
+// measures what the HLS muxer puts on disk: the segment grid across a restart,
+// the padded tail of a file whose audio ends early, and that mixing silence in
+// costs neither level nor bitrate.
+func TestLadderAudioOnlyRealFFmpeg(t *testing.T) {
+	if testing.Short() || os.Getenv("LADDER_INTEGRATION") == "" {
+		t.Skip("real encodes: set LADDER_INTEGRATION=1 (make test-ladder)")
+	}
+	ffmpeg, _ := ladderTools(t)
+	srcDir := t.TempDir()
+	segments := ladderSourceSeconds / int(DefaultSegmentDuration.Seconds())
+
+	for _, tt := range []struct {
+		name        string
+		audioEndsAt int
+	}{
+		{name: "full audio", audioEndsAt: ladderSourceSeconds},
+		{name: "audio ends early", audioEndsAt: audioShortStreamSecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			src := generateAudioSource(t, ffmpeg, srcDir, strconv.Itoa(tt.audioEndsAt), int64(910+tt.audioEndsAt), tt.audioEndsAt)
+			base, err := runAudioOnly(context.Background(), ffmpeg, t.TempDir(), src, 0)
+			if err != nil {
+				t.Fatalf("from-zero run: %v\n%s", err, base.stderr)
+			}
+			restart, err := runAudioOnly(context.Background(), ffmpeg, t.TempDir(), src, audioRestartSegment)
+			if err != nil {
+				t.Fatalf("restarted run: %v\n%s", err, restart.stderr)
+			}
+
+			track := mp4AudioTrack(t, filepath.Join(base.dir, "init.mp4"))
+			if track.timescale != 48000 {
+				t.Fatalf("init timescale = %d, want 48000", track.timescale)
+			}
+
+			from := audioDecodeTimes(t, base.dir, track)
+			again := audioDecodeTimes(t, restart.dir, mp4AudioTrack(t, filepath.Join(restart.dir, "init.mp4")))
+			worst, spread := 0.0, 0.0
+			for _, run := range []struct {
+				name  string
+				first int
+				times map[int]float64
+			}{{"from zero", 0, from}, {"restarted", audioRestartSegment, again}} {
+				for n := run.first; n < segments; n++ {
+					got, ok := run.times[n]
+					if !ok {
+						t.Fatalf("%s run never wrote segment %d of %d", run.name, n, segments)
+					}
+					want := float64(n) * DefaultSegmentDuration.Seconds()
+					worst = math.Max(worst, math.Abs(got-want))
+					if math.Abs(got-want) > audioGridTolerance {
+						t.Fatalf("%s run: segment %d starts at %.6fs, want %.6fs (tolerance %.1f ms)",
+							run.name, n, got, want, audioGridTolerance*1000)
+					}
+				}
+				for n := range run.times {
+					if n < run.first {
+						t.Fatalf("%s run wrote segment %d below its start number %d", run.name, n, run.first)
+					}
+				}
+			}
+			for n := audioRestartSegment; n < segments; n++ {
+				spread = math.Max(spread, math.Abs(from[n]-again[n]))
+			}
+			if spread > audioGridTolerance {
+				t.Fatalf("restarted segments sit %.3f ms from the from-zero run (tolerance %.1f ms)",
+					spread*1000, audioGridTolerance*1000)
+			}
+			t.Logf("%s: worst grid deviation %.3f ms, worst cross-run spread %.3f ms (tolerance %.1f ms)",
+				tt.name, worst*1000, spread*1000, audioGridTolerance*1000)
+
+			for _, run := range []audioRun{base, restart} {
+				if factor := ladderSourceSeconds / run.elapsed.Seconds(); factor < audioSpeedFloor {
+					t.Fatalf("encoded at %.1fx realtime, want at least %dx", factor, audioSpeedFloor)
+				}
+			}
+			peak, average := audioSegmentBitrates(t, base.dir)
+			t.Logf("%s: %.0f kbps average, %.0f kbps peak segment, %.1fx realtime from zero (%.2fs)",
+				tt.name, average, peak, ladderSourceSeconds/base.elapsed.Seconds(), base.elapsed.Seconds())
+
+			if tt.audioEndsAt == ladderSourceSeconds {
+				if average > audioMaxKbps {
+					t.Fatalf("average rate %.0f kbps exceeds the %d kbps budget", average, audioMaxKbps)
+				}
+				checkMixKeepsLevel(t, ffmpeg, src, base.dir)
+				return
+			}
+			// Past the source audio's end every segment is padding, and the
+			// player needs them: the playlist advertises the whole container.
+			firstSilent := audioShortStreamSecond/int(DefaultSegmentDuration.Seconds()) + 1
+			for _, run := range []audioRun{base, restart} {
+				for n := max(firstSilent, run.startSegment); n < segments; n++ {
+					info, err := os.Stat(filepath.Join(run.dir, segmentName(n)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if info.Size() > 4096 {
+						t.Fatalf("silent segment %d is %d bytes, want padding under 4 KB", n, info.Size())
+					}
+				}
+			}
+		})
+	}
+}
+
+// checkMixKeepsLevel compares a mixed segment against a plain encode of the
+// same window: amix attenuates by default, and normalize=0 is what keeps the
+// audio at the level the source has.
+func checkMixKeepsLevel(t *testing.T, ffmpeg string, src ladderSource, dir string) {
+	t.Helper()
+	const window = 1
+	start := strconv.Itoa(window * int(DefaultSegmentDuration.Seconds()))
+	plain := filepath.Join(t.TempDir(), "plain.m4a")
+	args := []string{
+		"-hide_banner", "-nostdin", "-y", "-v", "error",
+		"-ss", start, "-t", strconv.Itoa(int(DefaultSegmentDuration.Seconds())),
+		"-i", src.path, "-map", "0:a:0",
+	}
+	runFFmpeg(t, ffmpeg, append(append(args, audioTranscodeArgs()...), plain)...)
+
+	mixed := meanVolume(t, ffmpeg, "concat:"+filepath.Join(dir, "init.mp4")+"|"+filepath.Join(dir, segmentName(window)))
+	reference := meanVolume(t, ffmpeg, plain)
+	t.Logf("mixed segment mean volume %.1f dB, plain encode %.1f dB", mixed, reference)
+	if math.Abs(mixed-reference) > 0.5 {
+		t.Fatalf("mixing silence in moved the level by %.2f dB", mixed-reference)
+	}
+}
+
+func meanVolume(t *testing.T, ffmpeg, path string) float64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffmpeg,
+		"-hide_banner", "-nostdin", "-i", path, "-af", "volumedetect", "-f", "null", "-")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("volumedetect %s: %v\n%s", path, err, out)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		_, value, ok := strings.Cut(line, "mean_volume:")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(value), "dB"))
+		mean, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil {
+			t.Fatalf("parse mean_volume %q: %v", line, err)
+		}
+		return mean
+	}
+	t.Fatalf("no mean_volume in ffmpeg output:\n%s", out)
+	return 0
+}
+
+func audioSegmentBitrates(t *testing.T, dir string) (peak, average float64) {
+	t.Helper()
+	durations := segmentDurations(t, filepath.Join(dir, "stream.m3u8"))
+	if len(durations) == 0 {
+		t.Fatalf("%s: no segments in stream.m3u8", dir)
+	}
+	var totalBytes, totalSeconds float64
+	for name, seconds := range durations {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seconds <= 0 {
+			t.Fatalf("segment %s has duration %v", name, seconds)
+		}
+		peak = math.Max(peak, float64(info.Size())*8/seconds/1000)
+		totalBytes += float64(info.Size())
+		totalSeconds += seconds
+	}
+	return peak, totalBytes * 8 / totalSeconds / 1000
+}
+
+func audioDecodeTimes(t *testing.T, dir string, track mp4Track) map[int]float64 {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	times := make(map[int]float64)
+	for _, entry := range entries {
+		n, ok := parseSegmentName(entry.Name())
+		if !ok {
+			continue
+		}
+		base, ok := mp4DecodeTime(t, filepath.Join(dir, entry.Name()), track.id)
+		if !ok {
+			t.Fatalf("%s carries no tfdt for track %d", entry.Name(), track.id)
+		}
+		times[n] = float64(base) / float64(track.timescale)
+	}
+	if len(times) == 0 {
+		t.Fatalf("%s: no segments", dir)
+	}
+	return times
+}
+
+type audioRun struct {
+	dir          string
+	startSegment int
+	elapsed      time.Duration
+	stderr       string
+}
+
+func runAudioOnly(ctx context.Context, ffmpeg, dir string, src ladderSource, startSegment int) (audioRun, error) {
+	decision, err := DecideQuality(QualityAudio, src.file, ladderStreams, ladderH264Caps, nil, nil)
+	if err != nil {
+		return audioRun{}, err
+	}
+	if decision.Tier != TierAudioOnly {
+		return audioRun{}, fmt.Errorf("quality audio decided tier %q", decision.Tier)
+	}
+	procCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	cmd := ffmpegCommand(procCtx, FFmpegRequest{
+		Binary:          ffmpeg,
+		SourcePath:      src.path,
+		OutputDir:       dir,
+		Decision:        decision,
+		Capabilities:    ladderH264Caps,
+		File:            src.file,
+		Streams:         ladderStreams,
+		StartSegment:    startSegment,
+		SegmentDuration: DefaultSegmentDuration,
+	}, nil)
+	stderr := newTailBuffer(32 * 1024)
+	cmd.Stderr = stderr
+	started := time.Now()
+	err = cmd.Run()
+	return audioRun{dir: dir, startSegment: startSegment, elapsed: time.Since(started), stderr: stderr.String()}, err
+}
+
+// generateAudioSource writes a 40 s video whose mono 44.1 kHz tone stops after
+// audioSeconds: the catalog records the container duration either way, which is
+// what the silence track pads the encode out to.
+func generateAudioSource(t *testing.T, ffmpeg, dir, name string, id int64, audioSeconds int) ladderSource {
+	t.Helper()
+	path := filepath.Join(dir, "audio-"+name+".mp4")
+	runFFmpeg(t, ffmpeg,
+		"-hide_banner", "-nostdin", "-y", "-v", "error",
+		"-f", "lavfi", "-i", "testsrc2=size=320x180:rate=15",
+		"-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+		"-filter_complex", fmt.Sprintf("[1:a]atrim=0:%d[a]", audioSeconds),
+		"-map", "0:v", "-map", "[a]",
+		"-t", strconv.Itoa(ladderSourceSeconds),
+		"-c:v", "h264_videotoolbox", "-b:v", "2M", "-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-b:a", "128k",
+		path,
+	)
+	return ladderSource{
+		name: name,
+		path: path,
+		file: MediaFile{ID: id, Container: "mov", DurationS: ladderSourceSeconds, Width: 320, Height: 180},
+		fps:  15,
+	}
+}
+
+func runFFmpeg(t *testing.T, ffmpeg string, args ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, ffmpeg, args...).CombinedOutput(); err != nil {
+		t.Fatalf("ffmpeg %v failed: %v: %s", args, err, out)
+	}
+}
+
+// mp4AudioTrack reads the audio track out of an init segment and fails when the
+// output carries video at all: the tier exists to send none.
+func mp4AudioTrack(t *testing.T, path string) mp4Track {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	track := mp4Track{}
+	for _, trak := range mp4Children(mp4Descend(data, "moov"))["trak"] {
+		mdia := mp4Descend(trak, "mdia")
+		hdlr := mp4Descend(mdia, "hdlr")
+		if len(hdlr) < 12 {
+			t.Fatalf("%s: short hdlr", path)
+		}
+		kind := string(hdlr[8:12])
+		if kind == "vide" {
+			t.Fatalf("%s: audio-only output carries a video track", path)
+		}
+		if kind != "soun" {
+			continue
+		}
+		tkhd := mp4Descend(trak, "tkhd")
+		mdhd := mp4Descend(mdia, "mdhd")
+		if len(tkhd) < 24 || len(mdhd) < 24 {
+			t.Fatalf("%s: short tkhd/mdhd", path)
+		}
+		track.kind = kind
+		if tkhd[0] == 1 {
+			track.id = binary.BigEndian.Uint32(tkhd[20:])
+		} else {
+			track.id = binary.BigEndian.Uint32(tkhd[12:])
+		}
+		if mdhd[0] == 1 {
+			track.timescale = binary.BigEndian.Uint32(mdhd[20:])
+		} else {
+			track.timescale = binary.BigEndian.Uint32(mdhd[12:])
+		}
+	}
+	if track.kind != "soun" {
+		t.Fatalf("%s: no audio track", path)
+	}
+	return track
+}
