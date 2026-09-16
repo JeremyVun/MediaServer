@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -324,22 +325,7 @@ func TestManagerServesGeneratedHLSSegment(t *testing.T) {
 		t.Skip("ffmpeg not on PATH")
 	}
 	tmp := t.TempDir()
-	source := filepath.Join(tmp, "fixture.mp4")
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, ffmpeg,
-		"-hide_banner", "-nostdin", "-y", "-v", "error",
-		"-f", "lavfi", "-i", "testsrc=size=160x90:rate=15",
-		"-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000",
-		"-t", "3",
-		"-c:v", "libx264",
-		"-pix_fmt", "yuv420p",
-		"-c:a", "aac",
-		source,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("ffmpeg fixture generation failed: %v: %s", err, out)
-	}
+	source := generateAVFixture(t, ffmpeg, tmp)
 
 	mgr := NewManager(Options{
 		CacheDir:     filepath.Join(tmp, "hls"),
@@ -373,6 +359,115 @@ func TestManagerServesGeneratedHLSSegment(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
 		t.Fatalf("segment status=%d len=%d", rec.Code, rec.Body.Len())
+	}
+}
+
+// generateAVFixture writes three seconds of colour bars and a tone, the source
+// every real-ffmpeg case in this file runs through the manager.
+func generateAVFixture(t *testing.T, ffmpeg, dir string) string {
+	t.Helper()
+	source := filepath.Join(dir, "fixture.mp4")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffmpeg,
+		"-hide_banner", "-nostdin", "-y", "-v", "error",
+		"-f", "lavfi", "-i", "testsrc=size=160x90:rate=15",
+		"-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=48000",
+		"-t", "3",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-c:a", "aac",
+		source,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg fixture generation failed: %v: %s", err, out)
+	}
+	return source
+}
+
+func TestManagerServesAudioOnlyHLSSegment(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not on PATH")
+	}
+	tmp := t.TempDir()
+	source := generateAVFixture(t, ffmpeg, tmp)
+
+	file := MediaFile{ID: 98, Container: "mov", DurationS: 3, Width: 160, Height: 90}
+	streams := []Stream{
+		{StreamIndex: 0, Kind: "video", Codec: "h264"},
+		{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true},
+	}
+	caps := Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}}
+	decision, err := DecideQuality(QualityAudio, file, streams, caps, nil, nil)
+	if err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if decision.Tier != TierAudioOnly {
+		t.Fatalf("decided tier %q", decision.Tier)
+	}
+
+	mgr := NewManager(Options{
+		CacheDir:     filepath.Join(tmp, "hls"),
+		FFmpeg:       ffmpeg,
+		SegmentWait:  30 * time.Second,
+		PollInterval: 50 * time.Millisecond,
+	})
+	session, err := mgr.StartSession(context.Background(), StartRequest{
+		File:         file,
+		SourcePath:   source,
+		Streams:      streams,
+		Capabilities: caps,
+		Decision:     decision,
+	})
+	if err != nil {
+		t.Fatalf("start session: %v", err)
+	}
+	t.Cleanup(func() { mgr.EndSession(session.ID) })
+
+	playlist, err := mgr.Playlist(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("playlist: %v", err)
+	}
+	if !strings.Contains(playlist, `#EXT-X-MAP:URI="init.mp4"`) || strings.Contains(playlist, "#EXT-X-STREAM-INF") {
+		t.Fatalf("audio-only playlist is not a flat media playlist:\n%s", playlist)
+	}
+
+	var init []byte
+	for _, name := range []string{"init.mp4", "seg-00000.m4s"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", session.URL, nil)
+		if err := mgr.ServeRungSegment(rec, req, session.ID, "", name); err != nil {
+			t.Fatalf("serve %s: %v", name, err)
+		}
+		if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+			t.Fatalf("%s status=%d len=%d", name, rec.Code, rec.Body.Len())
+		}
+		if name == "init.mp4" {
+			init = rec.Body.Bytes()
+		}
+	}
+
+	handlers := mp4HandlerTypes(init)
+	if !slices.Contains(handlers, "soun") || slices.Contains(handlers, "vide") {
+		t.Fatalf("init.mp4 handlers = %v, want a sound track and no video track", handlers)
+	}
+}
+
+// mp4HandlerTypes lists the handler type of every hdlr box: an audio-only init
+// carries a soun track and no vide track at all.
+func mp4HandlerTypes(data []byte) []string {
+	var out []string
+	for i := 0; ; {
+		j := bytes.Index(data[i:], []byte("hdlr"))
+		if j < 0 {
+			return out
+		}
+		i += j + 4
+		if i+12 > len(data) {
+			return out
+		}
+		out = append(out, string(data[i+8:i+12]))
 	}
 }
 

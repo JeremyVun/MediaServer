@@ -36,7 +36,9 @@ import {
 import type { MediaStream, Quality, QualityRung } from '../api/types.ts'
 import { parseResumeOverride } from '../lib/searchParams.ts'
 import { Button, IconButton, Menu, MenuItem } from '../ui/index.ts'
-import { readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
+import { AudioOnlyBackdrop } from './AudioOnlyBackdrop.tsx'
+import { mediaSessionMetadata } from './mediaSession.ts'
+import { qualityAfterItemChange, readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
 import { Clock, SeekBar } from './SeekBar.tsx'
 import { usePlaybackSession } from './usePlaybackSession.ts'
 import {
@@ -165,7 +167,18 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   // another. The server may resolve it down for a smaller file, but that
   // resolved value is never stored, so a remembered 1080p still applies to the
   // next 1080p file.
-  const [requestedQuality, setRequestedQuality] = useState<Quality>(readStoredQuality)
+  const [requested, setRequested] = useState<{ itemID: number; quality: Quality }>(() => ({
+    itemID,
+    quality: readStoredQuality(),
+  }))
+  // Audio only is never stored, so another item has to fall back to the stored
+  // preference in the very render that sees the new id — the /play request
+  // below is keyed on the value.
+  const requestedQuality =
+    requested.itemID === itemID
+      ? requested.quality
+      : qualityAfterItemChange(requested.quality, readStoredQuality())
+  if (requested.itemID !== itemID) setRequested({ itemID, quality: requestedQuality })
   const session = usePlaybackSession(itemID, fileID, burnInSubtitleIndex, sessionAudioIndex, requestedQuality)
   const { mutate: saveProgressMutate } = useSaveProgress(itemID)
 
@@ -179,14 +192,21 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const [playingHeight, setPlayingHeight] = useState(0)
   // A quality or audio change re-POSTs /play and the session query has no
   // data until it lands; holding the last list keeps the menu mounted.
-  const [held, setHeld] = useState<{ itemID: number; qualities: QualityRung[] }>({
+  const [held, setHeld] = useState<{ itemID: number; qualities: QualityRung[]; audioOnly: boolean }>({
     itemID,
     qualities: NO_QUALITIES,
+    audioOnly: false,
   })
-  if (session.data && (held.itemID !== itemID || held.qualities !== session.data.qualities)) {
-    setHeld({ itemID, qualities: session.data.qualities })
+  if (
+    session.data &&
+    (held.itemID !== itemID ||
+      held.qualities !== session.data.qualities ||
+      held.audioOnly !== session.data.audio_only)
+  ) {
+    setHeld({ itemID, qualities: session.data.qualities, audioOnly: session.data.audio_only })
   }
   const heldQualities = held.itemID === itemID ? held.qualities : NO_QUALITIES
+  const heldAudioOnly = held.itemID === itemID && held.audioOnly
   const [controlsVisible, setControlsVisible] = useState(true)
   const [fullscreen, setFullscreen] = useState(false)
   const [videoError, setVideoError] = useState(false)
@@ -241,6 +261,20 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   useEffect(() => {
     lastProgress.current = null
   }, [itemID])
+
+  const itemTitle = item.data?.title
+  const itemThumbURL = item.data?.thumb_url
+  // Lock-screen and Control Centre metadata. No action handlers: the browser
+  // drives play/pause through the element on its own.
+  useEffect(() => {
+    if (!('mediaSession' in navigator) || itemTitle == null) return
+    navigator.mediaSession.metadata = new MediaMetadata(
+      mediaSessionMetadata(itemTitle, itemThumbURL ?? '', window.location.origin),
+    )
+    return () => {
+      navigator.mediaSession.metadata = null
+    }
+  }, [itemTitle, itemThumbURL])
 
   // paused mirrored in a ref so the self-rescheduling hide tick reads the live
   // value without being torn down and rebuilt on every play/pause.
@@ -386,11 +420,12 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
 
   const selectQuality = useCallback(
     (quality: Quality) => {
-      writeStoredQuality(quality)
+      // Audio only applies to this listen alone (design decision 2).
+      if (quality !== 'audio') writeStoredQuality(quality)
       if (quality !== requestedQuality) rememberPosition()
-      setRequestedQuality(quality)
+      setRequested({ itemID, quality })
     },
-    [rememberPosition, requestedQuality],
+    [itemID, rememberPosition, requestedQuality],
   )
 
   const cycleSubtitles = useCallback(() => {
@@ -691,6 +726,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   }
 
   const qualities = session.data?.qualities ?? heldQualities
+  const audioOnlyOffered = session.data?.audio_only ?? heldAudioOnly
   const resolvedQuality = session.data?.quality ?? requestedQuality
   const qualityLabel = resolveQualityLabel(resolvedQuality, qualities, playingHeight)
   const loading = item.isPending || session.isPending
@@ -767,6 +803,8 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           />
         ))}
       </video>
+
+      {resolvedQuality === 'audio' && <AudioOnlyBackdrop thumbURL={itemThumbURL} />}
 
       <div
         className={[
@@ -1018,6 +1056,11 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
                   {rung.id}
                 </MenuItem>
               ))}
+              {audioOnlyOffered && (
+                <MenuItem checked={resolvedQuality === 'audio'} onSelect={() => selectQuality('audio')}>
+                  Audio only
+                </MenuItem>
+              )}
             </PlayerMenu>
           )}
           {airplaySupported && (

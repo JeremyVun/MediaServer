@@ -24,6 +24,7 @@ const (
 	TierAudioTranscode = "audio_transcode"
 	TierFullTranscode  = "full_transcode"
 	TierLadder         = "ladder"
+	TierAudioOnly      = "audio_only"
 )
 
 type Capabilities struct {
@@ -108,15 +109,25 @@ func Decide(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamI
 // to Decide, so the whole existing pipeline stays byte-identical.
 func DecideQuality(quality string, file MediaFile, streams []Stream, caps Capabilities, subtitleStreamIndex, audioStreamIndex *int) (Decision, error) {
 	offered := OfferedRungs(file, streams)
+	if quality == QualityAudio {
+		if !AudioOnlyOffered(offered, streams) {
+			return originalDecision(file, streams, caps, subtitleStreamIndex, audioStreamIndex), nil
+		}
+		return Decision{
+			Mode:      ModeHLS,
+			Reason:    ReasonQuality,
+			Tier:      TierAudioOnly,
+			AudioPick: audioOnlyPick(streams, audioStreamIndex),
+			Quality:   QualityAudio,
+		}, nil
+	}
 	resolved, err := ResolveQuality(quality, offered)
 	if err != nil {
 		return Decision{}, err
 	}
 	rungs := RungsFor(resolved, offered)
 	if len(rungs) == 0 {
-		decision := Decide(file, streams, caps, subtitleStreamIndex, audioStreamIndex)
-		decision.Quality = QualityOriginal
-		return decision, nil
+		return originalDecision(file, streams, caps, subtitleStreamIndex, audioStreamIndex), nil
 	}
 	return Decision{
 		Mode:      ModeHLS,
@@ -129,6 +140,12 @@ func DecideQuality(quality string, file MediaFile, streams []Stream, caps Capabi
 	}, nil
 }
 
+func originalDecision(file MediaFile, streams []Stream, caps Capabilities, subtitleStreamIndex, audioStreamIndex *int) Decision {
+	decision := Decide(file, streams, caps, subtitleStreamIndex, audioStreamIndex)
+	decision.Quality = QualityOriginal
+	return decision
+}
+
 func pickAudioStream(streams []Stream, audioStreamIndex *int) *Stream {
 	if audioStreamIndex == nil {
 		return nil
@@ -137,6 +154,28 @@ func pickAudioStream(streams []Stream, audioStreamIndex *int) *Stream {
 		return &st
 	}
 	return nil
+}
+
+// audioOnlyPick always names a stream, so the audio tier's graph maps an
+// explicit input rather than ffmpeg's 0:a:0 — which is the first stream in file
+// order, not the one the container flags as default.
+func audioOnlyPick(streams []Stream, audioStreamIndex *int) *Stream {
+	if pick := pickAudioStream(streams, audioStreamIndex); pick != nil {
+		return pick
+	}
+	var first *Stream
+	for _, st := range streams {
+		if st.Kind != "audio" {
+			continue
+		}
+		if st.IsDefault {
+			return &st
+		}
+		if first == nil {
+			first = &st
+		}
+	}
+	return first
 }
 
 func pickBurnInStream(streams []Stream, subtitleStreamIndex *int) *Stream {
@@ -214,10 +253,10 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 		DurationS:           file.DurationS,
 		Width:               file.Width,
 		Height:              file.Height,
-		Capabilities:        normalizeCapabilities(ladderCapabilities(caps, decision)),
+		Capabilities:        normalizeCapabilities(profileCapabilities(caps, decision)),
 		Tier:                decision.Tier,
 		Reason:              decision.Reason,
-		SubtitleStreamIndex: subtitleStreamIndex,
+		SubtitleStreamIndex: profileSubtitleIndex(decision, subtitleStreamIndex),
 		AudioStreamIndex:    audioStreamIndex,
 		Rungs:               decision.Rungs,
 	}
@@ -226,14 +265,26 @@ func ProfileHash(file MediaFile, caps Capabilities, decision Decision, subtitleS
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// ladderCapabilities drops max_height from a ladder profile: the ladder sizes
-// itself, so a phone and an iPad share one cache entry.
-func ladderCapabilities(caps Capabilities, decision Decision) Capabilities {
-	if decision.Tier != TierLadder {
-		return caps
+// profileCapabilities drops what a tier does not encode from its profile: a
+// ladder sizes itself, so max_height goes and a phone and an iPad share one
+// cache entry; the audio tier encodes no video at all.
+func profileCapabilities(caps Capabilities, decision Decision) Capabilities {
+	switch decision.Tier {
+	case TierLadder:
+		caps.MaxHeight = 0
+	case TierAudioOnly:
+		caps = Capabilities{}
 	}
-	caps.MaxHeight = 0
 	return caps
+}
+
+// profileSubtitleIndex drops the burn-in pick from an audio-only profile: there
+// is no picture to burn into, so every pick shares one cache entry.
+func profileSubtitleIndex(decision Decision, subtitleStreamIndex *int) *int {
+	if decision.Tier == TierAudioOnly {
+		return nil
+	}
+	return subtitleStreamIndex
 }
 
 func videoStreamsSupported(file MediaFile, streams []Stream, caps Capabilities) bool {

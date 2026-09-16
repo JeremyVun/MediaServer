@@ -30,6 +30,7 @@ type playResponse struct {
 	SessionID *string            `json:"session_id,omitempty"`
 	Quality   string             `json:"quality"`
 	Qualities []qualityResponse  `json:"qualities"`
+	AudioOnly bool               `json:"audio_only"`
 	Subtitles []subtitleResponse `json:"subtitles"`
 }
 
@@ -107,7 +108,9 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subtitles := subtitleResponses(file.ID, streams)
-	qualities := qualityResponses(playbackpkg.OfferedRungs(media, playbackStreams))
+	offered := playbackpkg.OfferedRungs(media, playbackStreams)
+	qualities := qualityResponses(offered)
+	audioOnly := playbackpkg.AudioOnlyOffered(offered, playbackStreams)
 	if decision.Mode == playbackpkg.ModeDirect {
 		writeJSON(w, http.StatusOK, playResponse{
 			Mode:      "direct",
@@ -115,6 +118,7 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 			URL:       "/api/files/" + strconv.FormatInt(file.ID, 10) + "/stream",
 			Quality:   decision.Quality,
 			Qualities: qualities,
+			AudioOnly: audioOnly,
 			Subtitles: subtitles,
 		})
 		return
@@ -149,6 +153,7 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		SessionID: &session.ID,
 		Quality:   decision.Quality,
 		Qualities: qualities,
+		AudioOnly: audioOnly,
 		Subtitles: subtitles,
 	})
 }

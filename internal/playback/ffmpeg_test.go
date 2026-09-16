@@ -274,3 +274,122 @@ func assertArgs(t *testing.T, got []string, want string) {
 		t.Fatalf("args =\n%s\n\nwant\n%s", joined, want)
 	}
 }
+
+// audioOnlyTail is everything from the shared timestamp flags onward: the flat
+// HLS tail on the fixed 4 s grid, with no forced keyframes to gate.
+func audioOnlyTail(startNumber int) string {
+	return strings.Join([]string{
+		"-copyts", "-start_at_zero", "-avoid_negative_ts", "make_non_negative",
+		"-f", "hls",
+		"-hls_time", "4",
+		"-hls_playlist_type", "vod",
+		"-hls_segment_type", "fmp4",
+		"-hls_flags", "independent_segments+temp_file",
+		"-hls_segment_options", "movflags=+frag_discont",
+		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_segment_filename", "/cache/seg-%05d.m4s",
+		"-start_number", strconv.Itoa(startNumber),
+		"/cache/stream.m3u8",
+	}, "\n")
+}
+
+func audioOnlyRequest(file MediaFile, pick *Stream, startSegment int) FFmpegRequest {
+	return FFmpegRequest{
+		SourcePath:   "/media/movie.mkv",
+		OutputDir:    "/cache",
+		File:         file,
+		Capabilities: Capabilities{VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 720},
+		Decision: Decision{
+			Mode: ModeHLS, Reason: ReasonQuality, Tier: TierAudioOnly,
+			Quality: QualityAudio, AudioPick: pick,
+		},
+		StartSegment: startSegment,
+	}
+}
+
+func TestBuildFFmpegArgsAudioOnly(t *testing.T) {
+	file := MediaFile{ID: 1, DurationS: 60, Width: 1920, Height: 1080}
+	defaultPick := &Stream{StreamIndex: 1, Kind: "audio", Codec: "aac", IsDefault: true}
+	commentary := &Stream{StreamIndex: 3, Kind: "audio", Codec: "eac3"}
+
+	tests := []struct {
+		name string
+		req  FFmpegRequest
+		want []string
+	}{
+		{
+			name: "from zero",
+			req:  audioOnlyRequest(file, defaultPick, 0),
+			want: []string{
+				"-hide_banner", "-nostdin", "-y", "-v", "error",
+				"-i", "/media/movie.mkv",
+				"-t", "60.000", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+				"-filter_complex", "[1:a]asetpts=PTS+0.000/TB[s]" +
+					";[0:1]aformat=sample_rates=48000:channel_layouts=stereo[a0]" +
+					";[s][a0]amix=inputs=2:normalize=0:duration=longest[a]",
+				"-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+				audioOnlyTail(0),
+			},
+		},
+		{
+			name: "restart at segment five",
+			req:  audioOnlyRequest(file, defaultPick, 5),
+			want: []string{
+				"-hide_banner", "-nostdin", "-y", "-v", "error",
+				"-ss", "20.000",
+				"-i", "/media/movie.mkv",
+				"-t", "40.000", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+				"-filter_complex", "[1:a]asetpts=PTS+20.000/TB[s]" +
+					";[0:1]aformat=sample_rates=48000:channel_layouts=stereo[a0]" +
+					";[s][a0]amix=inputs=2:normalize=0:duration=longest[a]",
+				"-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+				audioOnlyTail(5),
+			},
+		},
+		{
+			name: "picked stream",
+			req:  audioOnlyRequest(file, commentary, 0),
+			want: []string{
+				"-hide_banner", "-nostdin", "-y", "-v", "error",
+				"-i", "/media/movie.mkv",
+				"-t", "60.000", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+				"-filter_complex", "[1:a]asetpts=PTS+0.000/TB[s]" +
+					";[0:3]aformat=sample_rates=48000:channel_layouts=stereo[a0]" +
+					";[s][a0]amix=inputs=2:normalize=0:duration=longest[a]",
+				"-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+				audioOnlyTail(0),
+			},
+		},
+		{
+			// anullsrc never ends on its own, so a restart at or past the
+			// container end drops the padding rather than hang on it.
+			name: "restart at the container end",
+			req:  audioOnlyRequest(MediaFile{ID: 1, DurationS: 20, Width: 1920, Height: 1080}, defaultPick, 5),
+			want: []string{
+				"-hide_banner", "-nostdin", "-y", "-v", "error",
+				"-ss", "20.000",
+				"-i", "/media/movie.mkv",
+				"-filter_complex", "[0:1]aformat=sample_rates=48000:channel_layouts=stereo[a]",
+				"-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+				audioOnlyTail(5),
+			},
+		},
+		{
+			name: "unknown duration",
+			req:  audioOnlyRequest(MediaFile{ID: 1, Width: 1920, Height: 1080}, defaultPick, 0),
+			want: []string{
+				"-hide_banner", "-nostdin", "-y", "-v", "error",
+				"-i", "/media/movie.mkv",
+				"-filter_complex", "[0:1]aformat=sample_rates=48000:channel_layouts=stereo[a]",
+				"-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+				audioOnlyTail(0),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertArgs(t, BuildFFmpegArgs(tt.req), strings.Join(tt.want, "\n"))
+		})
+	}
+}
