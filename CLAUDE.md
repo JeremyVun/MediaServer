@@ -12,9 +12,12 @@ fixed two load bugs (`_txlock=immediate` for SQLITE_BUSY, migration 0004 for
 the uploads→item purge FK). Hardware-only acceptance (reboot, 24 h soak,
 Lighthouse, real-device M6/M7 timing) is captured in `deploy/RUNBOOK.md`.
 Post-M9 (2026-09-16): the playback quality ladder — `quality` play
-parameter, Auto/fixed rungs, multivariant HLS — is specified in SPEC-API
-"Playback", SPEC-BACKEND "Quality ladder" and SPEC-FRONTEND "Player";
-`make test-ladder` runs its VideoToolbox integration encodes.
+parameter, Auto/fixed rungs, multivariant HLS — and the **Audio only**
+quality (`quality: "audio"`, a flat AAC-only session that keeps playing on
+a locked phone, never remembered, with Media Session metadata and a
+thumbnail backdrop) are specified in SPEC-API "Playback", SPEC-BACKEND
+"Quality ladder" / "Audio only" and SPEC-FRONTEND "Player";
+`make test-ladder` runs their real-ffmpeg integration encodes.
 
 Specs are implementation-grade and are the contract — when code and spec
 disagree, the spec wins unless you surface a reason:

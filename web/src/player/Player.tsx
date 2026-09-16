@@ -420,7 +420,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
 
   const selectQuality = useCallback(
     (quality: Quality) => {
-      // Audio only applies to this listen alone (design decision 2).
+      // Audio only is a per-listen pick, never the stored preference.
       if (quality !== 'audio') writeStoredQuality(quality)
       if (quality !== requestedQuality) rememberPosition()
       setRequested({ itemID, quality })
