@@ -66,6 +66,8 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	req.Capabilities = playbackpkg.ClientCapabilities(req.Capabilities)
+
 	file, root, ok := s.playableFile(w, r, itemID, req.FileID)
 	if !ok {
 		return
@@ -146,6 +148,8 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("start playback session", "file_id", file.ID, "error", err)
 		return
 	}
+	s.log.Info("playback session started", "session", session.ID, "item_id", itemID, "file_id", file.ID,
+		"tier", decision.Tier, "reason", decision.Reason, "quality", decision.Quality)
 	writeJSON(w, http.StatusOK, playResponse{
 		Mode:      "hls",
 		Reason:    &decision.Reason,
@@ -212,7 +216,7 @@ func (s *Server) handleHLSPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := s.playback.Playlist(r.Context(), r.PathValue("sid"))
 	if err != nil {
-		writePlaybackError(w, err)
+		s.writePlaybackError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8")
@@ -227,7 +231,7 @@ func (s *Server) handleHLSRungPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := s.playback.RungPlaylist(r.Context(), r.PathValue("sid"), r.PathValue("rung"))
 	if err != nil {
-		writePlaybackError(w, err)
+		s.writePlaybackError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8")
@@ -241,7 +245,7 @@ func (s *Server) handleHLSSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.playback.ServeRungSegment(w, r, r.PathValue("sid"), r.PathValue("rung"), r.PathValue("segment")); err != nil {
-		writePlaybackError(w, err)
+		s.writePlaybackError(w, r, err)
 	}
 }
 
@@ -441,13 +445,19 @@ func toPlaybackStreams(streams []store.Stream) []playbackpkg.Stream {
 	return out
 }
 
-func writePlaybackError(w http.ResponseWriter, err error) {
+func (s *Server) writePlaybackError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, playbackpkg.ErrNotFound):
+		s.log.Info("playback request for ended session", "path", r.URL.Path)
 		writeError(w, http.StatusNotFound, "not_found", "playback session not found")
 	case errors.Is(err, playbackpkg.ErrTimeout):
+		s.log.Warn("playback segment timed out", "path", r.URL.Path)
 		writeError(w, http.StatusGatewayTimeout, "segment_timeout", "playback segment is not ready")
+	case r.Context().Err() != nil:
+		s.log.Debug("playback request abandoned", "path", r.URL.Path, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal", "playback failed")
 	default:
+		s.log.Error("playback request failed", "path", r.URL.Path, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal", "playback failed")
 	}
 }

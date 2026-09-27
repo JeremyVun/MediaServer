@@ -195,8 +195,9 @@ func (m *Manager) StartSession(ctx context.Context, req StartRequest) (Session, 
 			segmentDuration: m.segmentDuration,
 			segmentWait:     m.segmentWait,
 			pollInterval:    m.pollInterval,
-			lastAccess:      time.Now(),
+			done:            make(chan struct{}),
 		}
+		w.touch()
 		m.workers[key] = w
 	}
 	session := &Session{ID: sid, URL: "/api/sessions/" + sid + "/master.m3u8", WorkerKey: key}
@@ -260,7 +261,7 @@ func (m *Manager) EndSession(sid string) bool {
 	m.mu.Unlock()
 
 	if worker != nil && !hasRefs {
-		worker.stop()
+		worker.close()
 	}
 	return true
 }
@@ -276,7 +277,7 @@ func (m *Manager) StopAll() {
 	m.mu.Unlock()
 
 	for _, w := range workers {
-		w.stop()
+		w.close()
 	}
 }
 
@@ -451,7 +452,7 @@ func (m *Manager) activeCacheDirs() map[string]bool {
 // session mapping dropped.
 func (m *Manager) reapIdle(now time.Time) {
 	m.mu.Lock()
-	var stop []*worker
+	var closed, stop []*worker
 	for key, w := range m.workers {
 		switch {
 		case w.idleSince(now, m.sessionTimeout):
@@ -461,12 +462,15 @@ func (m *Manager) reapIdle(now time.Time) {
 				}
 			}
 			delete(m.workers, key)
-			stop = append(stop, w)
+			closed = append(closed, w)
 		case w.idleSince(now, m.idleTimeout):
 			stop = append(stop, w)
 		}
 	}
 	m.mu.Unlock()
+	for _, w := range closed {
+		w.close()
+	}
 	for _, w := range stop {
 		w.stop()
 	}
@@ -488,14 +492,25 @@ type worker struct {
 	segmentWait     time.Duration
 	pollInterval    time.Duration
 
-	mu          sync.Mutex
-	cmdCancel   context.CancelFunc
-	cmdToken    *struct{}
+	// lastAccess is unix nanos, atomic so the reaper never waits on mu.
+	lastAccess atomic.Int64
+	// done closes once the manager drops the worker. Requests that looked it up
+	// before then must not start ffmpeg on it: nothing would ever stop it.
+	done      chan struct{}
+	closeOnce sync.Once
+
+	mu        sync.Mutex
+	closed    bool
+	cmdCancel context.CancelFunc
+	// cmdGen identifies the current ffmpeg; every start and stop bumps it so a
+	// superseded process's exit can't clear its replacement's state.
+	cmdGen      uint64
 	running     bool
 	startNumber int
-	lastAccess  time.Time
-	semHeld     bool
-	stderr      *tailBuffer
+	// semHeld is a videoSem slot owned by the worker, not by one ffmpeg: a seek
+	// restart keeps it, so it can never queue behind its own dying process.
+	semHeld bool
+	stderr  *tailBuffer
 }
 
 func (w *worker) noteWrite() {
@@ -505,15 +520,12 @@ func (w *worker) noteWrite() {
 }
 
 func (w *worker) touch() {
-	w.mu.Lock()
-	w.lastAccess = time.Now()
-	w.mu.Unlock()
+	w.lastAccess.Store(time.Now().UnixNano())
 }
 
 func (w *worker) idleSince(now time.Time, timeout time.Duration) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return !w.lastAccess.IsZero() && now.Sub(w.lastAccess) > timeout
+	last := w.lastAccess.Load()
+	return last != 0 && now.Sub(time.Unix(0, last)) > timeout
 }
 
 func (w *worker) playlist() string {
@@ -642,32 +654,57 @@ func (w *worker) serveSegment(wr http.ResponseWriter, r *http.Request, rung, nam
 // ensureSegment measures progress against dir. A ladder's rungs advance in
 // lockstep, so the requested rung's newest segment speaks for all of them.
 func (w *worker) ensureSegment(ctx context.Context, n int, dir string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.running && n >= w.startNumber && n <= w.diskHighLocked(dir)+w.forwardWindow() {
-		return nil
-	}
-	return w.startLocked(ctx, n)
+	return w.ensure(ctx, n, func() bool {
+		return w.running && n >= w.startNumber && n <= w.diskHighLocked(dir)+w.forwardWindow()
+	})
 }
 
 func (w *worker) ensureRunning(ctx context.Context, n int) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.running {
-		return nil
-	}
-	return w.startLocked(ctx, n)
+	return w.ensure(ctx, n, func() bool { return w.running })
 }
 
-func (w *worker) startLocked(ctx context.Context, n int) error {
-	w.stopLocked()
-	if err := os.MkdirAll(w.dir, 0o755); err != nil {
-		return err
-	}
-	for _, rung := range w.req.Decision.Rungs {
-		if err := os.MkdirAll(filepath.Join(w.dir, rung.ID), 0o755); err != nil {
+// ensure starts ffmpeg at segment n unless satisfied (called under mu) says the
+// running one will cover it. Waiting for a transcode slot happens without mu
+// held, so a full slot pool stalls only the requests that need a slot — never
+// the reaper, teardown, or other sessions.
+func (w *worker) ensure(ctx context.Context, n int, satisfied func() bool) error {
+	w.mu.Lock()
+	for {
+		if w.closed {
+			w.mu.Unlock()
+			return ErrNotFound
+		}
+		if satisfied() {
+			w.mu.Unlock()
+			return nil
+		}
+		if w.semHeld || !videoEncodingTier(w.req.Decision.Tier) {
+			err := w.startLocked(n)
+			w.mu.Unlock()
 			return err
 		}
+		w.mu.Unlock()
+		select {
+		case w.videoSem <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-w.done:
+			return ErrNotFound
+		}
+		w.mu.Lock()
+		if w.semHeld || w.closed {
+			<-w.videoSem
+			continue
+		}
+		w.semHeld = true
+	}
+}
+
+func (w *worker) startLocked(n int) error {
+	w.stopProcessLocked()
+	if err := w.makeDirs(); err != nil {
+		w.releaseSlotLocked()
+		return err
 	}
 
 	startNumber, seekS := n, float64(n)*w.segmentDuration.Seconds()
@@ -682,16 +719,6 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 			// of falling back one whole GOP.
 			seekS = w.keyframes.Starts[n] + 0.2
 			timestampOffset = w.keyframes.TimestampShift
-		}
-	}
-
-	semHeld := false
-	if videoEncodingTier(w.req.Decision.Tier) {
-		select {
-		case w.videoSem <- struct{}{}:
-			semHeld = true
-		case <-ctx.Done():
-			return ctx.Err()
 		}
 	}
 
@@ -713,17 +740,14 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
-		if semHeld {
-			<-w.videoSem
-		}
+		w.releaseSlotLocked()
 		return err
 	}
 	w.cmdCancel = cancel
-	token := &struct{}{}
-	w.cmdToken = token
+	w.cmdGen++
+	gen := w.cmdGen
 	w.running = true
 	w.startNumber = startNumber
-	w.semHeld = semHeld
 	w.stderr = stderr
 	w.noteWrite()
 
@@ -736,22 +760,35 @@ func (w *worker) startLocked(ctx context.Context, n int) error {
 		}
 		err := cmd.Wait()
 		w.noteWrite()
-		if semHeld {
-			<-w.videoSem
-		}
 		w.mu.Lock()
-		if w.cmdToken == token {
+		current := w.cmdGen == gen
+		if current {
 			w.cmdCancel = nil
-			w.cmdToken = nil
 			w.running = false
-			w.semHeld = false
+			w.releaseSlotLocked()
 		}
 		w.mu.Unlock()
 		cancel()
-		if err != nil && w.log != nil {
-			w.log.Debug("ffmpeg hls exited", "profile", w.key, "error", err, "stderr", stderr.String())
+		switch {
+		case err == nil || w.log == nil:
+		case current:
+			w.log.Warn("ffmpeg hls failed", "profile", w.key, "start_segment", startNumber, "error", err, "stderr", stderr.String())
+		default:
+			w.log.Debug("ffmpeg hls stopped", "profile", w.key, "start_segment", startNumber, "error", err)
 		}
 	}()
+	return nil
+}
+
+func (w *worker) makeDirs() error {
+	if err := os.MkdirAll(w.dir, 0o755); err != nil {
+		return err
+	}
+	for _, rung := range w.req.Decision.Rungs {
+		if err := os.MkdirAll(filepath.Join(w.dir, rung.ID), 0o755); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -762,19 +799,38 @@ func videoEncodingTier(tier string) bool {
 	return tier == TierFullTranscode || tier == TierLadder
 }
 
+// stop kills ffmpeg and frees the worker's transcode slot; the next segment
+// request restarts it.
 func (w *worker) stop() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.stopLocked()
+	w.stopProcessLocked()
+	w.releaseSlotLocked()
 }
 
-func (w *worker) stopLocked() {
+// close stops the worker for good once the manager has dropped it.
+func (w *worker) close() {
+	w.closeOnce.Do(func() { close(w.done) })
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+	w.stop()
+}
+
+func (w *worker) stopProcessLocked() {
 	if w.cmdCancel != nil {
 		w.cmdCancel()
 		w.cmdCancel = nil
-		w.cmdToken = nil
 	}
+	w.cmdGen++
 	w.running = false
+}
+
+func (w *worker) releaseSlotLocked() {
+	if w.semHeld {
+		<-w.videoSem
+		w.semHeld = false
+	}
 }
 
 // diskHighLocked reports the highest segment number present in the cache dir —

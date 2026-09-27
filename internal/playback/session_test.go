@@ -104,9 +104,7 @@ func TestManagerReapsIdleSessions(t *testing.T) {
 	// survive — a client that buffered minutes ahead comes back for more
 	// segments long after the last request (SPEC-BACKEND: "cached segments
 	// remain for resume").
-	w.mu.Lock()
-	w.lastAccess = time.Now().Add(-2 * time.Second)
-	w.mu.Unlock()
+	w.lastAccess.Store(time.Now().Add(-2 * time.Second).UnixNano())
 	mgr.reapIdle(time.Now())
 	if got := mgr.ActiveSessions(); got != 1 {
 		t.Fatalf("active sessions after idle reap = %d, want 1", got)
@@ -116,9 +114,7 @@ func TestManagerReapsIdleSessions(t *testing.T) {
 	}
 
 	// Past sessionTimeout: the session mapping is finally dropped.
-	w.mu.Lock()
-	w.lastAccess = time.Now().Add(-11 * time.Second)
-	w.mu.Unlock()
+	w.lastAccess.Store(time.Now().Add(-11 * time.Second).UnixNano())
 	mgr.reapIdle(time.Now())
 	if got := mgr.ActiveSessions(); got != 0 {
 		t.Fatalf("active sessions after session reap = %d, want 0", got)

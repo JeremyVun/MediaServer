@@ -35,6 +35,19 @@ type Capabilities struct {
 	NativeHLS   bool     `json:"native_hls"`
 }
 
+// minMaxHeight floors a client's max_height. Brave's fingerprinting protection
+// reports the browser window as the screen, so an 800 px window turned a free
+// remux of a 1080p file into a full transcode.
+const minMaxHeight = 1080
+
+// ClientCapabilities is what a play request's capabilities mean to the server.
+func ClientCapabilities(caps Capabilities) Capabilities {
+	if caps.MaxHeight > 0 && caps.MaxHeight < minMaxHeight {
+		caps.MaxHeight = minMaxHeight
+	}
+	return caps
+}
+
 type MediaFile struct {
 	ID          int64
 	Container   string

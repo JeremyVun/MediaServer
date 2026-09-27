@@ -440,3 +440,22 @@ func TestProfileHashIgnoresDeviceForAudioOnly(t *testing.T) {
 		t.Fatal("the audio tier and the ladder share a profile hash")
 	}
 }
+
+func TestClientCapabilitiesFloorsMaxHeight(t *testing.T) {
+	for _, tc := range []struct{ reported, want int }{
+		{0, 0},
+		{800, 1080},
+		{1080, 1080},
+		{2160, 2160},
+	} {
+		if got := ClientCapabilities(Capabilities{MaxHeight: tc.reported}).MaxHeight; got != tc.want {
+			t.Errorf("max_height %d → %d, want %d", tc.reported, got, tc.want)
+		}
+	}
+	file := MediaFile{ID: 1, Container: "matroska", Width: 1920, Height: 1040}
+	streams := []Stream{{StreamIndex: 0, Kind: "video", Codec: "h264"}, {StreamIndex: 1, Kind: "audio", Codec: "aac"}}
+	caps := ClientCapabilities(Capabilities{Containers: []string{"mp4"}, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac"}, MaxHeight: 800})
+	if got := Decide(file, streams, caps, nil, nil); got.Tier != TierRemux {
+		t.Fatalf("1040p h264 in an 800 px Brave window: tier %q, want remux", got.Tier)
+	}
+}
