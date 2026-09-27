@@ -115,6 +115,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const hlsRef = useRef<Hls | null>(null)
+  // Set while native HLS is on trial: returns true if it took over the error by
+  // switching to hls.js.
+  const nativeHlsFallback = useRef<(() => boolean) | null>(null)
   const lastTap = useRef(0)
   const resumed = useRef(false)
   const pendingSeek = useRef<number | null>(null)
@@ -445,50 +448,63 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     resumed.current = false
     video.removeAttribute('src')
 
-    if (session.data.mode === 'direct' || session.capabilities.native_hls) {
-      video.src = session.data.url
-      video.load()
-      return () => {
-        cancelled = true
-        video.removeAttribute('src')
-        video.load()
-      }
+    const url = session.data.url
+    const attachHlsJs = () => {
+      void import('hls.js')
+        .then(({ default: Hls }) => {
+          if (cancelled || !Hls.isSupported()) {
+            if (!cancelled) setVideoError(true)
+            return
+          }
+          const hls = new Hls()
+          hlsRef.current = hls
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (!data.fatal) return
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hls.startLoad()
+              return
+            }
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hls.recoverMediaError()
+              return
+            }
+            setVideoError(true)
+          })
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            // hls.js orders levels by bitrate; start on the one the server listed
+            // first, as Safari's native player does.
+            hls.startLevel = hls.firstLevel
+          })
+          hls.loadSource(url)
+          hls.attachMedia(video)
+        })
+        .catch(() => {
+          if (!cancelled) setVideoError(true)
+        })
     }
 
-    void import('hls.js')
-      .then(({ default: Hls }) => {
-        if (cancelled || !Hls.isSupported()) {
-          if (!cancelled) setVideoError(true)
-          return
-        }
-        const hls = new Hls()
-        hlsRef.current = hls
-        hls.on(Hls.Events.ERROR, (_event, data) => {
-          if (!data.fatal) return
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            hls.startLoad()
-            return
-          }
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError()
-            return
-          }
-          setVideoError(true)
-        })
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          // hls.js orders levels by bitrate; start on the one the server listed
-          // first, as Safari's native player does.
-          hls.startLevel = hls.firstLevel
-        })
-        hls.loadSource(session.data.url)
-        hls.attachMedia(video)
-      })
-      .catch(() => {
-        if (!cancelled) setVideoError(true)
-      })
+    if (session.data.mode === 'direct') {
+      video.src = url
+      video.load()
+    } else if (session.capabilities.native_hls) {
+      // Some Brave profiles answer "maybe" for HLS and then reject every
+      // playlist with "no supported sources"; hls.js plays those fine.
+      nativeHlsFallback.current = () => {
+        nativeHlsFallback.current = null
+        if (video.error?.code !== MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return false
+        video.removeAttribute('src')
+        attachHlsJs()
+        return true
+      }
+      video.src = url
+      video.load()
+    } else {
+      attachHlsJs()
+    }
 
     return () => {
       cancelled = true
+      nativeHlsFallback.current = null
       hlsRef.current?.destroy()
       hlsRef.current = null
       video.removeAttribute('src')
@@ -790,7 +806,10 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           setVolume(e.currentTarget.volume)
         }}
         onRateChange={(e) => setPlaybackRate(e.currentTarget.playbackRate)}
-        onError={() => setVideoError(true)}
+        onError={() => {
+          if (nativeHlsFallback.current?.()) return
+          setVideoError(true)
+        }}
       >
         {session.data?.subtitles.map((subtitle) => (
           <track
