@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/JeremyVun/MediaServer/internal/store"
 )
@@ -376,4 +377,15 @@ func TestProbe_RulingNeeded_OwnerMergeTargetRematched(t *testing.T) {
 	got := h.show(target.ID)
 	t.Logf("after the owner merged into %q, a later arrival left it: title=%q tvmaze=%d needs_check=%v alias source=%s",
 		target.Title, got.Title, derefInt64(got.TVmazeID), got.NeedsCheck, h.alias("lioness").Source)
+}
+
+// probe (RULING NEEDED, characterization): the backfill lock heuristic compares title and type only, so a legacy item whose year the owner set loses it to B10.1's parsed year.
+func TestProbe_RulingNeeded_LegacyOwnerYearLost(t *testing.T) {
+	h := newHarness(t, withClock(time.Hour))
+	if err := h.svc.MarkLegacyCutoff(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	item := h.itemAs("Blade.Runner.mkv", 7000, store.NewItem{Type: "video", Title: "Blade Runner", Year: ptr(1982)})
+	got := h.classify(item.ID)
+	t.Logf("legacy item with an owner-set year 1982 (v1 parsed none): after classify year=%v locked=%v type=%s", got.Year, got.Locked, got.Type)
 }

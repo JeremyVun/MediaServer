@@ -520,3 +520,49 @@ func TestProbe_Concurrency_UpgradeRacesOtherKeys(t *testing.T) {
 		}
 	}
 }
+
+// probe: an owner rename while show_refresh is fetching TVmaze survives the refresh (4c re-read, title_locked).
+func TestProbe_Concurrency_RenameDuringRefreshFetch(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(h)
+	h.tv.add(andorShow(), "andor")
+	item := h.classify(h.item("Andor.S01E01.mkv", 2400).ID)
+	show := *item.ShowID
+
+	const uri = "/shows/1"
+	release := g.hold(uri)
+	done := make(chan error, 1)
+	go func() { done <- h.svc.RefreshShow(context.Background(), show) }()
+	g.wait(t, uri)
+	if _, err := h.svc.RenameShow(h.ctx, show, "Mine"); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	await(t, done)
+	if got := h.show(show); got.Title != "Mine" || !got.TitleLocked {
+		t.Errorf("show = %+v, want the owner's title kept", got)
+	}
+}
+
+// probe: an owner rename while a later arrival is asking TVmaze survives the arrival's B7.4 match.
+func TestProbe_Concurrency_RenameDuringUpgradeLookup(t *testing.T) {
+	h := newHarness(t)
+	g := newGate(h)
+	lionessShows(h)
+	first := h.classify(h.item("Lioness.S03E01.mkv", 3000).ID)
+	show := *first.ShowID
+	arrival := h.item("Lioness.2023.S03E02.mkv", 3000)
+
+	const uri = "/search/shows?q=lioness"
+	release := g.hold(uri)
+	done := classifyAsync(h, arrival.ID)
+	g.wait(t, uri)
+	if _, err := h.svc.RenameShow(h.ctx, show, "Lioness (mine)"); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	await(t, done)
+	if got := h.show(show); got.Title != "Lioness (mine)" {
+		t.Errorf("show = %+v, want the owner's title kept through the match", got)
+	}
+}
