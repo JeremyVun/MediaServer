@@ -38,9 +38,9 @@ interface ExemplarShow {
   episodes: ExemplarEpisode[]
 }
 
-const sandbox: { window: { DATA?: { shows: ExemplarShow[] } } } = { window: {} }
+const sandbox: { window: { DATA?: { shows: ExemplarShow[]; synthetic_shows: ExemplarShow[] } } } = { window: {} }
 runInNewContext(readFileSync(`${WS}/data.js`, 'utf8'), sandbox)
-const exemplar = sandbox.window.DATA!.shows
+const exemplar = [...sandbox.window.DATA!.shows, ...sandbox.window.DATA!.synthetic_shows]
 
 const files = new Map<string, string>()
 
@@ -194,9 +194,17 @@ for (const [name, viewport] of FRAMES) {
         await page.goto(`/shows/${i + 1}`)
         await page.locator('[data-tiles] img').first().waitFor()
         await page.waitForTimeout(800)
-        for (const frac of [0, 0.25]) {
+        for (const frac of [0, 0.25, 0.5]) {
           await scrollTo(page, frac)
           await page.screenshot({ path: `${OUT}/s-${key}-${name}-${scheme}-${frac * 100}.png` })
+        }
+        const folded = shows[i + 1].seasons.find((s) => s.episodes.every((e) => e.kind === 'missing'))
+        if (folded) {
+          await page.goto(`/shows/${i + 1}?season=${folded.season}`)
+          await page.locator('[data-state="folded"]').scrollIntoViewIfNeeded()
+          await page.evaluate(() => window.scrollBy(0, 160))
+          await page.waitForTimeout(400)
+          await page.screenshot({ path: `${OUT}/s-${key}-${name}-${scheme}-fold.png` })
         }
       }
       await context.close()
@@ -205,8 +213,8 @@ for (const [name, viewport] of FRAMES) {
 }
 
 for (const [name, viewport] of FRAMES) {
-  test(`dialogs ${name} dark`, async ({ browser }) => {
-    const context = await browser.newContext({ viewport, deviceScaleFactor: 2, colorScheme: 'dark' })
+  for (const scheme of ['dark', 'light'] as const) test(`dialogs ${name} ${scheme}`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport, deviceScaleFactor: 2, colorScheme: scheme })
     const page = await context.newPage()
     await open(page, false)
     await page.goto('/shows/1')
@@ -216,16 +224,22 @@ for (const [name, viewport] of FRAMES) {
     const change = page.getByRole('dialog', { name: 'Change match' })
     await change.getByRole('radio').nth(1).waitFor()
     await page.waitForTimeout(600)
-    await page.screenshot({ path: `${OUT}/change-${name}-dark.png` })
+    await page.screenshot({ path: `${OUT}/change-${name}-${scheme}.png` })
     await change.getByRole('radio').first().click()
     await change.getByRole('combobox').waitFor()
-    await page.screenshot({ path: `${OUT}/change-picked-${name}-dark.png` })
+    await page.screenshot({ path: `${OUT}/change-picked-${name}-${scheme}.png` })
     await change.getByRole('button', { name: 'Cancel' }).click()
     await page.getByRole('button', { name: 'More' }).click()
     await page.getByRole('menuitem', { name: 'Merge into another show' }).click()
     await page.getByRole('dialog', { name: 'Merge into another show' }).getByRole('radio').first().waitFor()
     await page.waitForTimeout(400)
-    await page.screenshot({ path: `${OUT}/merge-${name}-dark.png` })
+    await page.screenshot({ path: `${OUT}/merge-${name}-${scheme}.png` })
+    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'More' }).click()
+    await page.getByRole('menuitem', { name: 'Rename' }).click()
+    await page.getByRole('dialog', { name: /Rename/ }).waitFor()
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: `${OUT}/rename-${name}-${scheme}.png` })
     await context.close()
   })
 }
@@ -262,6 +276,78 @@ if (process.env.SEAM) {
       })
     }
   }
+}
+
+// CONTRAST=1: frames plus shots/report.json for the exemplar's text-over-art
+// probe: cd / && python3 <workshop>/tools/photo_contrast.py <CAPTURE_OUT>/contrast
+if (process.env.CONTRAST) {
+  test.afterAll(() => {
+    const dir = `${OUT}/contrast/shots`
+    if (!existsSync(dir)) return
+    const parts = readdirSync(dir).filter((f) => /^report-.+\.json$/.test(f))
+    writeFileSync(`${dir}/report.json`, JSON.stringify(Object.assign({}, ...parts.map((f) => JSON.parse(readFileSync(`${dir}/${f}`, 'utf8'))))))
+  })
+  for (const [name, viewport] of FRAMES) {
+    for (const scheme of ['dark', 'light'] as const) {
+      test(`contrast ${name} ${scheme}`, async ({ browser }) => {
+        test.setTimeout(120_000)
+        const dir = `${OUT}/contrast/shots`
+        mkdirSync(dir, { recursive: true })
+        const context = await browser.newContext({ viewport, deviceScaleFactor: 2, colorScheme: scheme, reducedMotion: 'no-preference' })
+        const page = await context.newPage()
+        await open(page, false)
+        const report: Record<string, unknown> = {}
+        for (const [i, key] of SHOW_KEYS.entries()) {
+          await page.goto(`/shows/${i + 1}`)
+          await page.locator('[data-tiles]').waitFor()
+          await page.waitForTimeout(800)
+          for (const frac of [0, 0.25]) {
+            await scrollTo(page, frac)
+            const sid = `s-contrast-${key}-${name}-${scheme}-${frac * 100}`
+            await page.screenshot({ path: `${dir}/${sid}.png` })
+            report[sid] = { photoText: await page.evaluate(photoText), viewport: { ...viewport, dpr: 2 }, scheme, frame: name }
+          }
+        }
+        writeFileSync(`${dir}/report-${name}-${scheme}.json`, JSON.stringify(report))
+        await context.close()
+      })
+    }
+  }
+}
+
+/** Text drawn over the splash, as line-box rects and colours for the probe. */
+function photoText() {
+  const targets: [string, string][] = [
+    ['title', '[data-hero] h1'],
+    ['meta', '[data-hero] h1 + p'],
+    ['summary', '[data-hero] h1 ~ button > span'],
+    ['season chip', '[role="tab"][aria-selected="false"] > span'],
+    ['back link', 'main > div button > span'],
+  ]
+  const out = []
+  for (const [label, selector] of targets) {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+      if (label === 'back link' && el.textContent !== 'Library') continue
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      const rects = [...range.getClientRects()].filter((q) => q.width > 1 && q.height > 1)
+      if (!rects.length) continue
+      const box = el.getBoundingClientRect()
+      const r = {
+        left: Math.max(Math.min(...rects.map((q) => q.left)), box.left),
+        top: Math.max(Math.min(...rects.map((q) => q.top)), box.top),
+        right: Math.min(Math.max(...rects.map((q) => q.right)), box.right),
+        bottom: Math.min(Math.max(...rects.map((q) => q.bottom)), box.bottom),
+      }
+      if (r.bottom <= 0 || r.top >= innerHeight || r.right <= 0 || r.left >= innerWidth) continue
+      const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2)
+      if (!hit || !(el.contains(hit) || hit.contains(el))) continue
+      const cs = getComputedStyle(el)
+      const color = cs.color.match(/[\d.]+/g)!.map(Number)
+      out.push({ label, x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top, color, size: parseFloat(cs.fontSize), weight: Number(cs.fontWeight) })
+    }
+  }
+  return out
 }
 
 /** Every content box in view, so the probe measures only the backdrop. */

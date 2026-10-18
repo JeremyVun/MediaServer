@@ -285,7 +285,7 @@ function CollectionChips({ item, collections }: { item: ItemDetail; collections:
                   "Couldn't update collection",
                 )
               }}
-              className="border-line bg-accent-fill text-on-accent rounded-full border px-3 py-1.5 text-sm"
+              className="border-line-strong text-primary hover:bg-raised rounded-full border px-3 py-1.5 text-sm"
             >
               {collection.name}
             </button>
@@ -311,7 +311,7 @@ function FileRow({
       onClick={onSelect}
       className={[
         'bg-surface border-line flex w-full items-center justify-between gap-4 rounded-lg border p-4 text-left',
-        selected ? 'ring-2 ring-accent' : 'hover:bg-raised',
+        selected ? 'border-primary' : 'hover:bg-raised',
       ].join(' ')}
     >
       <span className="min-w-0">

@@ -71,5 +71,7 @@ export function NoneThumb() {
   )
 }
 
-/** The candidate list's scroll area: tall enough for five rows. */
-export const LIST = 'scrollbar-subtle -mx-2 mt-3 max-h-[min(22rem,50vh)] space-y-1 overflow-y-auto px-2'
+/** The candidate list's scroll area: five rows and half of a sixth, so a
+    longer list shows that it scrolls, and short enough on a phone that the
+    Change dialog's season row and footer still fit on screen. */
+export const LIST = 'scrollbar-subtle -mx-2 mt-3 max-h-[min(28rem,calc(100dvh-30rem))] space-y-1 overflow-y-auto px-2'

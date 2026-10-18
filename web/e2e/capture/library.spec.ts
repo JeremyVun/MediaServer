@@ -30,9 +30,9 @@ const mock = {
 
 const serve = async (route: Route, file: string) => route.fulfill({ status: 200, contentType: 'image/jpeg', body: readFileSync(file) })
 
-for (const [name, viewport, scale] of [['phone', { width: 390, height: 844 }, 2], ['desktop', { width: 1440, height: 900 }, 2]] as const) {
-  test(`library ${name}`, async ({ browser }) => {
-    const context = await browser.newContext({ viewport, deviceScaleFactor: scale, colorScheme: 'dark' })
+for (const [name, viewport] of [['phone', { width: 390, height: 844 }], ['desktop', { width: 1440, height: 900 }]] as const) {
+  for (const scheme of ['dark', 'light'] as const) test(`library ${name} ${scheme}`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport, deviceScaleFactor: 2, colorScheme: scheme })
     const page = await context.newPage()
     await mockLibraryApi(page, mock as never, async (route, path) => {
       let m = path.match(/^\/api\/shows\/(\d+)\/(poster|backdrop)$/)
@@ -48,12 +48,16 @@ for (const [name, viewport, scale] of [['phone', { width: 390, height: 844 }, 2]
     await page.goto('/')
     await page.locator('[data-library-grid] img').first().waitFor()
     await page.waitForTimeout(1200)
-    await page.screenshot({ path: `${OUT}/library-${name}-dark.png` })
-    if (name === 'desktop') {
-      await page.getByRole('tab', { name: 'Shows' }).click()
+    await page.screenshot({ path: `${OUT}/library-${name}-${scheme}.png` })
+    for (const tab of ['Shows', 'Movies']) {
+      await page.getByRole('tab', { name: tab }).click()
       await page.waitForTimeout(800)
-      await page.screenshot({ path: `${OUT}/shows-${name}-dark.png` })
+      await page.screenshot({ path: `${OUT}/${tab.toLowerCase()}-${name}-${scheme}.png` })
     }
+    await page.getByRole('tab', { name: 'All' }).click()
+    await page.locator('[data-library-grid]').scrollIntoViewIfNeeded()
+    await page.waitForTimeout(600)
+    await page.screenshot({ path: `${OUT}/library-grid-${name}-${scheme}.png`, fullPage: true })
     await context.close()
   })
 }

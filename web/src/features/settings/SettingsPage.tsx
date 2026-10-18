@@ -690,8 +690,8 @@ function SwatchPreview({ swatch }: { swatch: ThemeSwatch }) {
 // 'System' follows the OS: a diagonal split of the built-in dark and light
 // canvases — the familiar auto-appearance signifier.
 function SystemPreview() {
-  const dark = THEMES.find((t) => t.value === 'dark')?.swatch.canvas ?? '#0c0d10'
-  const light = THEMES.find((t) => t.value === 'light')?.swatch.canvas ?? '#f7f6f3'
+  const dark = THEMES.find((t) => t.value === 'dark')!.swatch.canvas
+  const light = THEMES.find((t) => t.value === 'light')!.swatch.canvas
   return (
     <span
       className="absolute inset-0"

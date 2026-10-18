@@ -90,14 +90,14 @@ function ItemCheck({ item, onChange }: { item: ItemDetail; onChange: () => void 
   const message =
     item.type === 'episode' && item.show ? (
       <>
-        Filed under <span className="text-primary font-medium">{item.show.title}</span>
+        Added to <span className="text-primary font-medium">{item.show.title}</span>
         {item.season != null && item.episode != null
           ? ` as ${formatEpisodeLabel(item.season, item.episode, item.episode_end)}`
           : ''}
         .
       </>
     ) : (
-      `Sorted as a ${item.type} from the file name.`
+      `Listed as a ${item.type}, based on its file name.`
     )
   return <CheckStrip message={message} confirming={patch.isPending} onConfirm={confirm} onChange={onChange} />
 }

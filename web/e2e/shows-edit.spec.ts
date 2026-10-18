@@ -91,7 +91,7 @@ test('an episode shows its show and place, and Looks right confirms it', async (
   await expect(page.getByRole('link', { name: 'Furious' })).toHaveAttribute('href', '/shows/5')
   await expect(page.getByText('· Season 1 · Episode 3')).toBeVisible()
   const strip = page.locator('[data-check-strip]')
-  await expect(strip).toHaveText(/Filed under Furious as S1 E3\./)
+  await expect(strip).toHaveText(/Added to Furious as S1 E3\./)
   await strip.getByRole('button', { name: 'Looks right' }).click()
   await expect(strip).toHaveCount(0)
   expect(patches).toEqual([{ confirmed: true }])
@@ -199,10 +199,37 @@ test('a flagged movie confirms with Looks right and shows its summary clamped', 
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 
   const strip = page.locator('[data-check-strip]')
-  await expect(strip).toHaveText(/Sorted as a movie from the file name\./)
+  await expect(strip).toHaveText(/Listed as a movie, based on its file name\./)
   await strip.getByRole('button', { name: 'Looks right' }).click()
   await expect(strip).toHaveCount(0)
   expect(patches).toEqual([{ confirmed: true }])
+})
+
+test('item detail has one amber accent: Play, not the file row or collection chips', async ({ page }) => {
+  const second = { ...itemDetail().files[0], id: 2, rel_path: 'Furious/Furious.S01E03.720p.mkv' }
+  await mockItem(page, itemDetail({ files: [itemDetail().files[0], second], collection_ids: [3] }))
+  await page.route(
+    (url) => url.pathname === '/api/collections',
+    (route) => json(route, [{ id: 3, name: 'to watch', item_count: 1, thumb_urls: [] }]),
+  )
+  await page.goto('/items/501')
+  await expect(page.getByRole('button', { name: 'to watch' })).toBeVisible()
+  await expect(page.getByText('Selected', { exact: true })).toBeVisible()
+  await page.mouse.move(0, 0)
+
+  const amber = await page.evaluate(() => {
+    const accent = /rgb\((232, 163, 61|199, 126, 20)\)/
+    const hits: string[] = []
+    for (const el of document.querySelectorAll<HTMLElement>('main *')) {
+      if (!el.checkVisibility()) continue
+      const cs = getComputedStyle(el)
+      const border = parseFloat(cs.borderTopWidth) > 0 && accent.test(cs.borderTopColor)
+      const outline = cs.outlineStyle !== 'none' && accent.test(cs.outlineColor)
+      if (accent.test(cs.backgroundColor) || border || outline || accent.test(cs.boxShadow)) hits.push(el.textContent?.trim() ?? el.tagName)
+    }
+    return hits
+  })
+  expect(amber).toEqual(['Play'])
 })
 
 async function mockSettings(page: Page, available: boolean) {

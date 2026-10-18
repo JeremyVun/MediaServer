@@ -145,6 +145,21 @@ async function setup(page: Page, options: { matchTaken?: boolean; show?: ShowDet
 
 const tiles = (page: Page) => page.locator('[data-tiles]')
 
+/** Present, missing and unaired tiles share one box per grid cell: equal
+    size, every column at one x and every row at one y (within 0.5 px). */
+async function expectTileGrid(page: Page) {
+  const boxes = await tiles(page)
+    .locator(':scope > *')
+    .evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect))
+  const near = (a: number, b: number) => Math.abs(a - b) <= 0.5
+  const columns = boxes.filter((b) => near(b.y, boxes[0].y)).map((b) => b.x)
+  for (const [i, b] of boxes.entries()) {
+    expect(near(b.width, boxes[0].width) && near(b.height, boxes[0].height), `tile ${i} size`).toBe(true)
+    expect(near(b.x, columns[i % columns.length]), `tile ${i} x`).toBe(true)
+    expect(near(b.y, boxes[i - (i % columns.length)].y), `tile ${i} y`).toBe(true)
+  }
+}
+
 test('renders the up-next season with missing and unaired tiles, and switches seasons in place', async ({ page }) => {
   await setup(page)
   await page.goto(`/shows/${SHOW_ID}`)
@@ -162,13 +177,7 @@ test('renders the up-next season with missing and unaired tiles, and switches se
   await expect(tiles(page).getByRole('link', { name: '1 Episode title 1' })).toContainText('Watched')
   await expect(tiles(page).getByRole('link', { name: '2 Episode title 2' })).toContainText('40 min left')
 
-  const boxes = await tiles(page).locator(':scope > *').evaluateAll((els) =>
-    els.map((el) => {
-      const r = el.getBoundingClientRect()
-      return [Math.round(r.width), Math.round(r.height)]
-    }),
-  )
-  expect(new Set(boxes.map((b) => b.join('x'))).size).toBe(1)
+  await expectTileGrid(page)
 
   const url = page.url()
   await missing.click({ force: true })
@@ -307,4 +316,85 @@ test('an unknown show reads Show not found', async ({ page }) => {
   await setup(page)
   await page.goto('/shows/77')
   await expect(page.getByText('Show not found')).toBeVisible({ timeout: 8_000 })
+})
+
+function seasonsShow(): ShowDetail {
+  const missing = (season: number, number: number) => ({
+    kind: 'missing' as const, season, number, title: `Episode ${number}`, airdate: `20${String(season).padStart(2, '0')}-03-0${number}`, missing: true as const,
+  })
+  const seasons = Array.from({ length: 22 }, (_, i) => i + 1).map((season) => ({
+    season,
+    episodes:
+      season === 21
+        ? Array.from({ length: 12 }, (_, i) => episode(2100 + i, i + 1, { season: 21, title: i === 9 ? 'A long title beside a two-digit number' : `Episode title ${i + 1}` }))
+        : [1, 2, 3].map((n) => missing(season, n)),
+  }))
+  return furious({
+    season_count: 22,
+    needs_check: false,
+    summary: Array.from({ length: 12 }, () => 'A long summary that keeps going so the clamp has work to do.').join(' '),
+    up_next: upNext(2106, { season: 21, episode: 7 }),
+    seasons,
+  })
+}
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  test('22 seasons open on the up-next chip, fully visible, with no page overflow', async ({ page }) => {
+    await setup(page, { show: seasonsShow() })
+    await page.goto(`/shows/${SHOW_ID}`)
+    const row = page.getByRole('tablist', { name: 'Seasons' })
+    const selected = row.getByRole('tab', { selected: true })
+    await expect(selected).toHaveAccessibleName('Season 21')
+    await expect(selected).toHaveText('S21')
+    expect(await row.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
+    await expect
+      .poll(async () => {
+        const [r, c] = await Promise.all([row.boundingBox(), selected.locator('span').boundingBox()])
+        return !!r && !!c && c.x >= r.x && c.x + c.width <= r.x + r.width && c.x + c.width <= 390
+      })
+      .toBe(true)
+    await expect(row.getByRole('tab', { name: 'Season 1, none in your library' }).locator('span')).toHaveCSS('border-style', 'dashed')
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+    await expectTileGrid(page)
+
+    // A two-digit number keeps its 6 px gap before the title.
+    const foot = tiles(page).getByRole('link', { name: /^10 / }).locator('span > span').first()
+    const [number, title] = await foot.locator(':scope > span').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect))
+    expect(title.x - (number.x + number.width)).toBeGreaterThanOrEqual(5.5)
+  })
+
+  test('the summary clamps to 3 lines and expands on tap; tiles carry no description', async ({ page }) => {
+    await setup(page, { show: seasonsShow() })
+    await page.goto(`/shows/${SHOW_ID}`)
+    const summary = page.locator('[data-hero] h1 ~ button').first()
+    const lines = async () =>
+      summary.evaluate((el) => Math.round(el.getBoundingClientRect().height / parseFloat(getComputedStyle(el).lineHeight)))
+    expect(await lines()).toBe(3)
+    await summary.click()
+    expect(await lines()).toBeGreaterThan(3)
+
+    const tile = tiles(page).getByRole('link').first()
+    await expect(tile).toHaveText(/^1Episode title 1\d+ min$/)
+  })
+})
+
+test('the Check strip is opaque, and Change keeps Not on TVmaze in view on open', async ({ page }) => {
+  const results = Array.from({ length: 8 }, (_, i) => ({ tvmaze_id: 100 + i, name: `Furious ${i}`, year: 2000 + i, network: 'Hulu', poster_url: null, local_show_id: null }))
+  await setup(page, { show: furious({ tvmaze_id: null }) })
+  await page.route(
+    (url) => url.pathname === '/api/shows/match-search',
+    (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ results }) }),
+  )
+  await page.goto(`/shows/${SHOW_ID}`)
+  await expect(page.locator('[data-check-strip]')).toHaveCSS('background-color', /^rgb\(/)
+
+  await page.locator('[data-check-strip]').getByRole('button', { name: 'Change' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Change match' })
+  await expect(dialog.getByRole('radio', { name: 'Furious 7' })).toBeAttached()
+  const none = dialog.getByRole('radio', { name: /Not on TVmaze/ })
+  await expect(none).toHaveAttribute('aria-checked', 'true')
+  await expect(none).toBeInViewport({ ratio: 1 })
+  await expect(dialog.getByRole('radio', { name: 'Furious 7' })).not.toBeInViewport()
 })

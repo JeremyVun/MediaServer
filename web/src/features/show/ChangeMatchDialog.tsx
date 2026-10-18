@@ -130,31 +130,36 @@ function Change({
         onChange={(e) => setInput(e.target.value)}
         icon={<Search className="size-4" strokeWidth={1.75} />}
       />
-      <div role="radiogroup" aria-label="TVmaze show" className={LIST}>
-        {results.map((candidate) => (
+      <div role="radiogroup" aria-label="TVmaze show">
+        <div className={LIST}>
+          {results.map((candidate) => (
+            <OptionRow
+              key={candidate.tvmaze_id}
+              thumb={<PosterThumb src={candidate.poster_url} />}
+              title={candidate.name}
+              meta={candidateMeta(candidate, show.id)}
+              selected={candidate.tvmaze_id === selectedID}
+              onSelect={() => select(candidate.tvmaze_id)}
+            />
+          ))}
+          {search.isFetching && results.length === 0 && (
+            <p className="px-2 py-3 text-sm text-secondary">Searching TVmaze…</p>
+          )}
+          {search.isError && <p className="px-2 py-3 text-sm text-secondary">Can't reach TVmaze right now.</p>}
+          {search.isSuccess && results.length === 0 && (
+            <p className="px-2 py-3 text-sm text-secondary">No shows found on TVmaze.</p>
+          )}
+        </div>
+        {/* Outside the scroll area, so the current state stays in view on open. */}
+        <div className="-mx-2 mt-1 px-2">
           <OptionRow
-            key={candidate.tvmaze_id}
-            thumb={<PosterThumb src={candidate.poster_url} />}
-            title={candidate.name}
-            meta={candidateMeta(candidate, show.id)}
-            selected={candidate.tvmaze_id === selectedID}
-            onSelect={() => select(candidate.tvmaze_id)}
+            thumb={<NoneThumb />}
+            title="Not on TVmaze"
+            meta="Keep the names from the files"
+            selected={selectedID == null}
+            onSelect={() => select(null)}
           />
-        ))}
-        {search.isFetching && results.length === 0 && (
-          <p className="px-2 py-3 text-sm text-secondary">Searching TVmaze…</p>
-        )}
-        {search.isError && <p className="px-2 py-3 text-sm text-secondary">Can't reach TVmaze right now.</p>}
-        {search.isSuccess && results.length === 0 && (
-          <p className="px-2 py-3 text-sm text-secondary">No shows found on TVmaze.</p>
-        )}
-        <OptionRow
-          thumb={<NoneThumb />}
-          title="Not on TVmaze"
-          meta="Keep the names from the files"
-          selected={selectedID == null}
-          onSelect={() => select(null)}
-        />
+        </div>
       </div>
       {gap != null && seasons.data && tvSeason != null && !taken && (
         <div className="border-line mt-4 border-t pt-4">

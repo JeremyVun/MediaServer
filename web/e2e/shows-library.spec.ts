@@ -85,6 +85,20 @@ test('the mixed grid renders splash, spine, movie and pending-episode cards', as
 
   // Movies and videos never carry a spine.
   await expect(cards.getByRole('link', { name: /^Open (Zodiac|Home video|Andor)/ })).toHaveCount(0)
+
+  // Splash, spine, movie and offline cards share one 16:9 frame per grid cell.
+  const boxes = await cards.locator(':scope > *').evaluateAll((els) =>
+    els.map((el) => {
+      const frame = [...el.querySelectorAll('*')].find((d) => getComputedStyle(d).aspectRatio === '16 / 9')
+      return (frame ?? el).getBoundingClientRect().toJSON() as DOMRect
+    }),
+  )
+  const near = (a: number, b: number) => Math.abs(a - b) <= 0.5
+  const columns = boxes.filter((b) => near(b.y, boxes[0].y)).map((b) => b.x)
+  for (const [i, b] of boxes.entries()) {
+    expect(near(b.width, boxes[0].width) && near(b.height, boxes[0].height), `card ${i} size`).toBe(true)
+    expect(near(b.x, columns[i % columns.length]) && near(b.y, boxes[i - (i % columns.length)].y), `card ${i} cell`).toBe(true)
+  }
 })
 
 test('the type tabs scope only the grid; Continue watching stays unchanged', async ({ page }) => {
