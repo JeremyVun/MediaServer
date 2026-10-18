@@ -146,7 +146,7 @@ func TestOwnerAliasBeatsTVmaze(t *testing.T) {
 	}
 }
 
-func TestCountryCodeAndYearRetries(t *testing.T) {
+func TestCountryCodeRetryAndYearlessQueries(t *testing.T) {
 	h := newHarness(t)
 	h.tv.add(tvShow{id: 2, name: "Euphoria", premiered: "2019-06-16"}, "euphoria")
 	h.tv.add(tvShow{id: 3, name: "Lanterns", premiered: "2025-08-17"}, "lanterns")
@@ -165,8 +165,8 @@ func TestCountryCodeAndYearRetries(t *testing.T) {
 		t.Fatalf("2019 file joined show %d, want %d (one Euphoria)", *dated.ShowID, show.ID)
 	}
 	lanterns := h.classify(h.item("Lanterns.2025.S01E01.mkv", 3300).ID)
-	if got := h.tv.searched(); strings.Join(got[2:], "|") != "euphoria 2019|euphoria|lanterns 2025|lanterns" {
-		t.Fatalf("searches = %q, want the year dropped on a miss", got)
+	if got := h.tv.searched(); strings.Join(got[2:], "|") != "euphoria|lanterns" {
+		t.Fatalf("searches = %q, want queries without the year (B7)", got)
 	}
 	if ls := h.show(*lanterns.ShowID); ls.TVmazeID == nil || *ls.TVmazeID != 3 || ls.NeedsCheck {
 		t.Fatalf("lanterns = %+v", ls)
@@ -369,6 +369,14 @@ func TestLockedItemsUntouched(t *testing.T) {
 	if h.tv.hits.Load() != 0 || len(h.shows()) != 0 {
 		t.Fatal("a locked non-episode reached TVmaze or formed a show")
 	}
+
+	long := h.item("Long.Home.Video.mkv", 7200)
+	if _, err := h.st.UpdateItem(h.ctx, long.ID, store.UpdateItemParams{Type: ptr("video"), Locked: &locked}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.classify(long.ID); got.Type != "video" {
+		t.Fatalf("owner's locked hour-long video = %+v, want it kept a video", got)
+	}
 }
 
 func TestBackfillLockHeuristic(t *testing.T) {
@@ -389,9 +397,15 @@ func TestBackfillLockHeuristic(t *testing.T) {
 	if !film.Locked || film.Type != "movie" || film.Title != "Some Film" {
 		t.Fatalf("owner's type edit = %+v, want locked movie", film)
 	}
-	renamed := h.classify(legacy("Other.Film.2011.mkv", 7000, "video", "My Favourite Film").ID)
+	renamed := h.classify(legacy("Other.Film.2011.mkv", 2400, "video", "My Favourite Film").ID)
 	if !renamed.Locked || renamed.Type != "video" || renamed.Title != "My Favourite Film" || renamed.ShowID != nil {
 		t.Fatalf("owner's title edit = %+v, want it kept and locked", renamed)
+	}
+	// Ruling B7: v1 wrote video for everything, so a legacy lock keeps the
+	// title but an hour-long video still becomes a movie.
+	toyStory := h.classify(legacy("incoming/Toy.Story.5.2026.1080p.DCPRIP.LTE.x264-SPLiCE.mkv", 6000, "video", "Toy Story 5").ID)
+	if !toyStory.Locked || toyStory.Type != "movie" || toyStory.Title != "Toy Story 5" || toyStory.NeedsCheck {
+		t.Fatalf("Toy Story 5 = %+v, want a locked movie keeping its title", toyStory)
 	}
 	if h.tv.hits.Load() != 0 {
 		t.Fatal("locked non-episodes reached TVmaze")
@@ -453,7 +467,7 @@ func TestSol(t *testing.T) {
 		sol, fake := newFakeSol(t)
 		h := newHarness(t, withSol(sol))
 		h.setting(store.SettingSemanticClassification, "1")
-		h.tv.add(tvShow{id: 8, name: "Ghost in the Shell", premiered: "2026-07-01"}, "ghost in the shell 2026")
+		h.tv.add(tvShow{id: 8, name: "Ghost in the Shell", premiered: "2026-07-01"}, "ghost in the shell")
 		a := episode
 		a.Confident = true
 		fake.answer(a)
@@ -470,7 +484,7 @@ func TestSol(t *testing.T) {
 		sol, fake := newFakeSol(t)
 		h := newHarness(t, withSol(sol))
 		h.setting(store.SettingSemanticClassification, "1")
-		h.tv.add(ghost, "the ghost in the shell 2026")
+		h.tv.add(ghost, "the ghost in the shell")
 		fake.answer(episode)
 		item := h.classify(h.item(unsure, 1500).ID)
 		show := h.show(*item.ShowID)
@@ -482,7 +496,7 @@ func TestSol(t *testing.T) {
 		sol, fake := newFakeSol(t)
 		h := newHarness(t, withSol(sol))
 		h.setting(store.SettingSemanticClassification, "1")
-		h.tv.add(ghost, "the ghost in the shell 2026")
+		h.tv.add(ghost, "the ghost in the shell")
 		fake.fail()
 		item := h.classify(h.item(unsure, 1500).ID)
 		if item.ShowID == nil || *h.show(*item.ShowID).TVmazeID != 7 || !item.NeedsCheck || fake.callCount() != 1 {
@@ -492,7 +506,7 @@ func TestSol(t *testing.T) {
 	t.Run("off: never asked, unsure parse flagged", func(t *testing.T) {
 		sol, fake := newFakeSol(t)
 		h := newHarness(t, withSol(sol))
-		h.tv.add(ghost, "the ghost in the shell 2026")
+		h.tv.add(ghost, "the ghost in the shell")
 		item := h.classify(h.item(unsure, 1500).ID)
 		if fake.callCount() != 0 || !item.NeedsCheck {
 			t.Fatalf("calls = %d item = %+v", fake.callCount(), item)

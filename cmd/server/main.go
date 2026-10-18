@@ -110,6 +110,7 @@ func run() error {
 	tvmazeClient := tvmaze.New(tvmaze.Options{
 		BaseURL:   cfg.TVmaze.BaseURL,
 		UserAgent: "media-server/" + version,
+		Log:       logger,
 	})
 	sol := &semantic.Classifier{}
 	classifier := classify.New(classify.Options{
@@ -119,6 +120,7 @@ func run() error {
 		TVmaze: tvmazeClient,
 		Sol:    sol,
 		ArtDir: cfg.ArtDir(),
+		FFmpeg: cfg.Transcode.FFmpeg,
 	})
 	if err := classifier.MarkLegacyCutoff(ctx); err != nil {
 		return fmt.Errorf("mark classify cutoff: %w", err)

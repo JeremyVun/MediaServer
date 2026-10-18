@@ -49,29 +49,65 @@ func (s *Service) showRemoved(show *store.Show) {
 // RefreshShow runs the show_refresh job: refetch a matched show's metadata
 // and episode list and retitle its unlocked episodes, or retry the match of
 // a show formed while TVmaze was unreachable. An error wrapping
-// ErrUnreachable asks for a retry later.
+// ErrUnreachable asks for a retry later. TVmaze is asked before taking the
+// lock, and the show is re-read under it.
 func (s *Service) RefreshShow(ctx context.Context, showID int64) error {
-	if err := s.lock(ctx); err != nil {
-		return err
+	for attempt := 0; ; attempt++ {
+		art, err := s.refreshOnce(ctx, showID)
+		if !errors.As(err, &staleLookup{}) || attempt == maxStale {
+			s.fetchArt(ctx, art)
+			return err
+		}
 	}
-	defer s.unlock()
+}
+
+func (s *Service) refreshOnce(ctx context.Context, showID int64) (*artJob, error) {
 	show, err := s.store.GetShow(ctx, showID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if show.TVmazeID == nil {
-		if show.RefreshedAt != nil || !show.NeedsCheck {
-			return nil
+		if !awaitingRematch(show) {
+			return nil, nil
 		}
-		return s.rematch(ctx, show)
+		q, err := s.rematchQuery(ctx, show)
+		if err != nil {
+			return nil, err
+		}
+		lk, err := s.lookUp(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		return s.locked(ctx, func() (*artJob, error) { return s.rematch(ctx, showID, lk) })
 	}
-	if show, err = s.refreshMetadata(ctx, show); err != nil {
-		return s.tvmazeFailure(ctx, show.ID, err)
+	tvmazeID := *show.TVmazeID
+	tv, fetchErr := s.tvmaze.Show(ctx, int(tvmazeID))
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
-	return s.afterRefresh(ctx, show)
+	return s.locked(ctx, func() (*artJob, error) {
+		show, err := s.store.GetShow(ctx, showID)
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if show.TVmazeID == nil || *show.TVmazeID != tvmazeID {
+			return nil, staleLookup{}
+		}
+		if fetchErr != nil {
+			return nil, s.tvmazeFailure(ctx, show.ID, tvmazeError{fetchErr})
+		}
+		show, art, err := s.applyMetadata(ctx, show, tv)
+		if err != nil {
+			return nil, err
+		}
+		return art, s.afterRefresh(ctx, show)
+	})
 }
 
 func (s *Service) afterRefresh(ctx context.Context, show store.Show) error {
@@ -106,48 +142,106 @@ func (s *Service) tvmazeFailure(ctx context.Context, showID int64, err error) er
 	return fmt.Errorf("refresh show %d: %w: %w", showID, ErrUnreachable, err)
 }
 
+// awaitingRematch: an unmatched show formed while TVmaze was down, never
+// settled since.
+func awaitingRematch(show store.Show) bool {
+	return show.TVmazeID == nil && show.RefreshedAt == nil && show.NeedsCheck
+}
+
+func (s *Service) rematchQuery(ctx context.Context, show store.Show) (showQuery, error) {
+	q := showQuery{name: show.Title, key: library.ShowKey(show.Title), year: show.Year}
+	items, err := s.store.ListItemsByShow(ctx, show.ID)
+	if err != nil {
+		return showQuery{}, err
+	}
+	for _, item := range items {
+		if item.Episode != nil {
+			q.season, q.episode, _ = numbers(item)
+			break
+		}
+	}
+	return q, nil
+}
+
 // rematch retries matching an unmatched show formed while TVmaze was down.
 // A weak result is never attached; a confident one whose show is already
 // local merges this show into it, as classify would have attached there.
-func (s *Service) rematch(ctx context.Context, show store.Show) error {
-	m, err := s.match(ctx, show.Title, library.ShowKey(show.Title), show.Year)
+// Callers hold the lock.
+func (s *Service) rematch(ctx context.Context, showID int64, lk *lookup) (*artJob, error) {
+	show, err := s.store.GetShow(ctx, showID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		return s.tvmazeFailure(ctx, show.ID, err)
+		return nil, err
 	}
-	if !m.confident {
+	if !awaitingRematch(show) {
+		return nil, staleLookup{}
+	}
+	q, err := s.rematchQuery(ctx, show)
+	if err != nil {
+		return nil, err
+	}
+	if !lk.answers(q) {
+		return nil, staleLookup{q}
+	}
+	if lk.err != nil {
+		return nil, s.tvmazeFailure(ctx, show.ID, lk.err)
+	}
+	if !lk.m.confident {
 		_, err := s.store.UpdateShow(ctx, show.ID, store.UpdateShowParams{RefreshedAt: store.SetTo(s.stamp())})
-		return err
+		return nil, err
 	}
-	id := int64(m.result.ID)
+	s.log.Info("classify: show matched on TVmaze after an outage", "show_id", show.ID, "tvmaze_id", lk.m.result.ID)
+	_, art, err := s.adopt(ctx, show, lk)
+	if err != nil {
+		return nil, s.tvmazeFailure(ctx, show.ID, err)
+	}
+	return art, nil
+}
+
+// adopt gives an unmatched show lk's confident TVmaze match: aliases are
+// kept, metadata and episode titles refreshed. When another local show
+// already has that match, show merges into it instead. It returns the show
+// the items now belong to; a TVmaze error leaves the match set for a
+// refresh. Callers hold the lock.
+func (s *Service) adopt(ctx context.Context, show store.Show, lk *lookup) (store.Show, *artJob, error) {
+	id := int64(lk.m.result.ID)
 	local, err := s.store.GetShowByTVmazeID(ctx, id)
 	if err == nil {
-		s.log.Info("classify: rematched show already local, merging", "show_id", show.ID, "into", local.ID)
-		return s.merge(ctx, show.ID, local.ID)
+		s.log.Info("classify: matched show already local, merging", "show_id", show.ID, "into", local.ID)
+		if err := s.merge(ctx, show.ID, local.ID); err != nil {
+			return store.Show{}, nil, err
+		}
+		local, err = s.store.GetShow(ctx, local.ID)
+		return local, nil, err
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		return err
+		return store.Show{}, nil, err
+	}
+	if !lk.fetched() {
+		return store.Show{}, nil, staleLookup{lk.q}
 	}
 	clear := false
 	if show, err = s.store.UpdateShow(ctx, show.ID, store.UpdateShowParams{
 		TVmazeID:   store.SetTo(id),
 		NeedsCheck: &clear,
 	}); err != nil {
-		return err
+		return store.Show{}, nil, err
 	}
-	s.log.Info("classify: show matched on TVmaze after an outage", "show_id", show.ID, "tvmaze_id", id)
-	if show, err = s.refreshMetadata(ctx, show); err != nil {
-		return s.tvmazeFailure(ctx, show.ID, err)
+	if lk.showErr != nil {
+		return show, nil, lk.showErr
 	}
-	return s.afterRefresh(ctx, show)
+	show, art, err := s.applyMetadata(ctx, show, *lk.show)
+	if err != nil {
+		return show, nil, err
+	}
+	return show, art, s.afterRefresh(ctx, show)
 }
 
-// refreshMetadata copies TVmaze's show, episode list and missing art into
-// the catalog. A title_locked title is never changed.
-func (s *Service) refreshMetadata(ctx context.Context, show store.Show) (store.Show, error) {
-	tv, err := s.tvmaze.Show(ctx, int(*show.TVmazeID))
-	if err != nil {
-		return show, tvmazeError{err}
-	}
+// applyMetadata copies TVmaze's show and episode list into the catalog and
+// says which art to fetch. A title_locked title is never changed.
+func (s *Service) applyMetadata(ctx context.Context, show store.Show, tv tvmaze.Show) (store.Show, *artJob, error) {
 	episodes := make([]store.ShowEpisode, 0, len(tv.Episodes))
 	for _, e := range tv.Episodes {
 		ep := store.ShowEpisode{Season: e.Season, Number: e.Number, Title: e.Title}
@@ -160,7 +254,7 @@ func (s *Service) refreshMetadata(ctx context.Context, show store.Show) (store.S
 		episodes = append(episodes, ep)
 	}
 	if err := s.store.ReplaceShowEpisodes(ctx, show.ID, episodes); err != nil {
-		return show, err
+		return show, nil, err
 	}
 	p := store.UpdateShowParams{RefreshedAt: store.SetTo(s.stamp())}
 	if name := strings.TrimSpace(tv.Name); name != "" && !show.TitleLocked {
@@ -172,44 +266,111 @@ func (s *Service) refreshMetadata(ctx context.Context, show store.Show) (store.S
 	if tv.Summary != "" {
 		p.Summary = store.SetTo(tv.Summary)
 	}
-	if show, err = s.store.UpdateShow(ctx, show.ID, p); err != nil {
-		return show, err
+	if tv.Network != "" {
+		p.Network = store.SetTo(tv.Network)
 	}
-	return s.fetchArt(ctx, show, tv.PosterURL)
+	show, err := s.store.UpdateShow(ctx, show.ID, p)
+	if err != nil {
+		return show, nil, err
+	}
+	if show.PosterAt != nil && show.BackdropAt != nil {
+		return show, nil, nil
+	}
+	return show, &artJob{showID: show.ID, tvmazeID: *show.TVmazeID, posterURL: tv.PosterURL}, nil
+}
+
+// maxBackgroundAttempts bounds how many dead background links are tried.
+const maxBackgroundAttempts = 4
+
+// artJob is art a show still lacks, for the match it had when asked.
+type artJob struct {
+	showID, tvmazeID int64
+	posterURL        string
 }
 
 // fetchArt downloads whichever of the poster and backdrop is not cached
-// yet. Art is best effort: a failure leaves it for the next refresh.
-func (s *Service) fetchArt(ctx context.Context, show store.Show, posterURL string) (store.Show, error) {
-	var p store.UpdateShowParams
-	if show.PosterAt == nil && posterURL != "" {
-		if err := s.tvmaze.FetchImage(ctx, posterURL, s.PosterPath(show.ID)); err != nil {
+// yet, trying backgrounds best first past dead links (ruling B7). It runs
+// without the lock and installs the images only if the show still has the
+// same match. Art is best effort: a failure leaves it for the next refresh.
+func (s *Service) fetchArt(ctx context.Context, job *artJob) {
+	if job == nil {
+		return
+	}
+	show, err := s.store.GetShow(ctx, job.showID)
+	if err != nil || show.TVmazeID == nil || *show.TVmazeID != job.tvmazeID {
+		return
+	}
+	var poster, backdrop string
+	if show.PosterAt == nil && job.posterURL != "" {
+		if poster, err = s.prepareImage(ctx, job.posterURL, PosterMaxWidth); err != nil {
 			s.log.Warn("classify: poster download failed", "show_id", show.ID, "error", err)
-		} else {
-			p.PosterAt = store.SetTo(s.stamp())
 		}
 	}
 	if show.BackdropAt == nil {
-		url, err := s.tvmaze.Images(ctx, int(*show.TVmazeID))
-		switch {
-		case err != nil:
+		backgrounds, err := s.tvmaze.Backgrounds(ctx, int(job.tvmazeID))
+		if err != nil {
 			s.log.Warn("classify: backdrop lookup failed", "show_id", show.ID, "error", err)
-		case url == "":
-		default:
-			if err := s.tvmaze.FetchImage(ctx, url, s.BackdropPath(show.ID)); err != nil {
-				s.log.Warn("classify: backdrop download failed", "show_id", show.ID, "error", err)
-			} else {
-				p.BackdropAt = store.SetTo(s.stamp())
+		}
+		for _, bg := range backgrounds[:min(len(backgrounds), maxBackgroundAttempts)] {
+			if backdrop, err = s.prepareImage(ctx, bg.URL, BackdropMaxWidth); err == nil {
+				break
+			}
+			s.log.Warn("classify: backdrop download failed", "show_id", show.ID, "error", err)
+			if ctx.Err() != nil {
+				break
 			}
 		}
 	}
-	if ctx.Err() != nil {
-		return show, ctx.Err()
+	defer removeIfSet(poster, backdrop)
+	if poster == "" && backdrop == "" {
+		return
+	}
+	if err := s.installArt(ctx, job, poster, backdrop); err != nil {
+		s.log.Warn("classify: install show art", "show_id", show.ID, "error", err)
+	}
+}
+
+func (s *Service) installArt(ctx context.Context, job *artJob, poster, backdrop string) error {
+	if err := s.lock(ctx); err != nil {
+		return err
+	}
+	defer s.unlock()
+	show, err := s.store.GetShow(ctx, job.showID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil || show.TVmazeID == nil || *show.TVmazeID != job.tvmazeID {
+		return err
+	}
+	var p store.UpdateShowParams
+	if poster != "" && show.PosterAt == nil {
+		if err := os.Rename(poster, s.PosterPath(show.ID)); err != nil {
+			return err
+		}
+		p.PosterAt = store.SetTo(s.stamp())
+	}
+	if backdrop != "" && show.BackdropAt == nil {
+		if err := os.Rename(backdrop, s.BackdropPath(show.ID)); err != nil {
+			return err
+		}
+		p.BackdropAt = store.SetTo(s.stamp())
 	}
 	if !p.PosterAt.Set && !p.BackdropAt.Set {
-		return show, nil
+		return nil
 	}
-	return s.store.UpdateShow(ctx, show.ID, p)
+	if _, err := s.store.UpdateShow(ctx, show.ID, p); err != nil {
+		return err
+	}
+	s.publish(events.ShowUpdated, show.ID)
+	return nil
+}
+
+func removeIfSet(paths ...string) {
+	for _, p := range paths {
+		if p != "" {
+			os.Remove(p)
+		}
+	}
 }
 
 type episodeNumber struct{ season, number int }

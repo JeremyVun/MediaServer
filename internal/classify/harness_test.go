@@ -25,13 +25,22 @@ import (
 )
 
 type tvShow struct {
-	id        int
-	name      string
-	premiered string
-	summary   string
-	episodes  []tvEpisode
-	poster    bool
-	backdrop  bool
+	id          int
+	name        string
+	premiered   string
+	summary     string
+	network     string
+	country     string
+	episodes    []tvEpisode
+	poster      bool
+	backdrop    bool
+	backgrounds []tvBackground // served after the backdrop flag's one
+}
+
+type tvBackground struct {
+	width int
+	main  bool
+	dead  bool // its URL 404s
 }
 
 type tvEpisode struct {
@@ -48,6 +57,15 @@ type fakeTVmaze struct {
 	shows    map[int]tvShow
 	search   map[string][]int // query → show ids, best score first
 	searches []string
+	paths    []string          // every request path, in order
+	images   map[string][]byte // image path → body, else a placeholder
+	dead     map[string]bool   // image paths that 404
+	// maxAge > 0 sends TVmaze's Cache-Control: public, max-age=N.
+	maxAge int
+	// stalls holds requests for these URIs without an answer until the
+	// channel closes, as TVmaze's origin did; stalled reports each one.
+	stalls  map[string]chan struct{}
+	stalled chan string
 
 	down  atomic.Bool
 	hits  atomic.Int64
@@ -55,7 +73,8 @@ type fakeTVmaze struct {
 }
 
 func newFakeTVmaze(t *testing.T) *fakeTVmaze {
-	f := &fakeTVmaze{shows: map[int]tvShow{}, search: map[string][]int{}}
+	f := &fakeTVmaze{shows: map[int]tvShow{}, search: map[string][]int{}, images: map[string][]byte{}, dead: map[string]bool{},
+		stalls: map[string]chan struct{}{}, stalled: make(chan string, 16)}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -65,8 +84,45 @@ func (f *fakeTVmaze) add(show tvShow, queries ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shows[show.id] = show
+	for i, bg := range show.backgrounds {
+		if bg.dead {
+			f.dead[backgroundPath(show.id, i)] = true
+		}
+	}
 	for _, q := range queries {
 		f.search[q] = append(f.search[q], show.id)
+	}
+}
+
+func backgroundPath(showID, i int) string { return fmt.Sprintf("/img/bg-%d-%d.jpg", showID, i) }
+
+// requests counts the requests whose path starts with prefix.
+func (f *fakeTVmaze) requests(prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.paths {
+		if strings.HasPrefix(p, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// stall holds requests for uri until the returned func releases them.
+func (f *fakeTVmaze) stall(uri string) (release func()) {
+	ch := make(chan struct{})
+	f.mu.Lock()
+	f.stalls[uri] = ch
+	f.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.stalls, uri)
+			f.mu.Unlock()
+			close(ch)
+		})
 	}
 }
 
@@ -86,7 +142,23 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
+	release, stalled := f.stalls[r.URL.RequestURI()]
+	f.mu.Unlock()
+	if stalled {
+		f.stalled <- r.URL.RequestURI()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		http.Error(w, "stalled", http.StatusGatewayTimeout)
+		return
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.paths = append(f.paths, r.URL.Path)
+	if f.maxAge > 0 {
+		w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(f.maxAge))
+	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.URL.Path == "/search/shows":
@@ -98,6 +170,14 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, out)
 	case parts[0] == "img":
+		if f.dead[r.URL.Path] {
+			http.NotFound(w, r)
+			return
+		}
+		if body, ok := f.images[r.URL.Path]; ok {
+			w.Write(body)
+			return
+		}
 		w.Write([]byte("image " + r.URL.Path))
 	case parts[0] == "shows" && len(parts) >= 2:
 		id, _ := strconv.Atoi(parts[1])
@@ -121,6 +201,10 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 				imgs = append(imgs, map[string]any{"type": "background", "main": true,
 					"resolutions": map[string]any{"original": map[string]any{"url": f.srv.URL + fmt.Sprintf("/img/bg-%d.jpg", id), "width": 1920}}})
 			}
+			for i, bg := range show.backgrounds {
+				imgs = append(imgs, map[string]any{"type": "background", "main": bg.main,
+					"resolutions": map[string]any{"original": map[string]any{"url": f.srv.URL + backgroundPath(id, i), "width": bg.width}}})
+			}
 			writeJSON(w, imgs)
 		}
 	default:
@@ -130,6 +214,13 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 
 func (f *fakeTVmaze) showJSON(s tvShow) map[string]any {
 	m := map[string]any{"id": s.id, "name": s.name, "premiered": s.premiered, "summary": s.summary}
+	if s.network != "" {
+		network := map[string]any{"name": s.network, "country": nil}
+		if s.country != "" {
+			network["country"] = map[string]any{"code": s.country}
+		}
+		m["network"] = network
+	}
 	if s.poster {
 		url := f.srv.URL + fmt.Sprintf("/img/poster-%d.jpg", s.id)
 		m["image"] = map[string]any{"medium": url, "original": url}

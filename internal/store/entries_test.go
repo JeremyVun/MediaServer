@@ -36,7 +36,7 @@ func newCatalog(t *testing.T) *catalog {
 	l.below = f.show("Below")
 	l.carrie = f.show("Carrie")
 	l.dark = f.show("Dark")
-	f.exec(`UPDATE shows SET year = 2022, needs_check = 0 WHERE id = ?`, l.andor.ID)
+	f.exec(`UPDATE shows SET year = 2022, network = 'Disney+', needs_check = 0 WHERE id = ?`, l.andor.ID)
 	f.exec(`UPDATE shows SET year = 2025 WHERE id = ?`, l.below.ID)
 
 	for i, title := range []string{"Kassa", "That Would Be Me", "Reckoning"} {
@@ -159,6 +159,7 @@ func TestListEntriesProgressAndSummaries(t *testing.T) {
 	l := newCatalog(t)
 	l.progress(l.andorEps[0], 3000, 3000, true, "2026-07-01 20:00:00")
 	l.progress(l.belowEps[0], 100, 3000, false, "2026-09-01 20:00:00")
+	l.exec(`UPDATE media_files SET duration_s = NULL WHERE item_id = ?`, l.belowEps[0].ID)
 	l.progress(l.darkEp, 3000, 3000, true, "2026-06-01 20:00:00")
 	l.progress(l.zodiac, 100, 9000, false, "2026-08-01 20:00:00")
 	l.progress(l.clip, 60, 60, true, "2026-05-01 20:00:00")
@@ -181,10 +182,10 @@ func TestListEntriesProgressAndSummaries(t *testing.T) {
 		t.Errorf("collection ids andor %v below %v", andor.CollectionIDs, below.CollectionIDs)
 	}
 	if up := andor.UpNext; up == nil || up.ItemID != l.andorEps[1].ID || up.Title != "That Would Be Me" ||
-		up.Season != 1 || up.Episode != 2 || !up.Available || up.Progress != nil {
+		up.Season != 1 || up.Episode != 2 || !up.Available || up.Progress != nil || up.DurationS == nil || *up.DurationS != 3000 {
 		t.Errorf("andor up next = %+v", andor.UpNext)
 	}
-	if up := below.UpNext; up == nil || up.ItemID != l.belowEps[0].ID || up.Progress == nil || up.Progress.PositionS != 100 {
+	if up := below.UpNext; up == nil || up.ItemID != l.belowEps[0].ID || up.Progress == nil || up.Progress.PositionS != 100 || up.DurationS != nil {
 		t.Errorf("below up next = %+v", below.UpNext)
 	}
 	if dark.UpNext != nil || !dark.NeedsCheck || len(dark.CollectionIDs) != 0 {
@@ -199,6 +200,9 @@ func TestListEntriesProgressAndSummaries(t *testing.T) {
 	summary, err := l.s.GetShowSummary(l.ctx, l.andor.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if summary.Network == nil || *summary.Network != "Disney+" {
+		t.Errorf("summary network = %v", summary.Network)
 	}
 	if summary.UpNext == nil || summary.UpNext.ItemID != l.andorEps[1].ID || summary.UpNext.Available || !summary.Available {
 		t.Errorf("offline up next = %+v (show available %v)", summary.UpNext, summary.Available)

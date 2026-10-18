@@ -3,6 +3,7 @@ package tvmaze
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -82,7 +83,7 @@ func TestShow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.ID != 52341 || s.Name != "Andor" || s.Year != 2022 {
+	if s.ID != 52341 || s.Name != "Andor" || s.Year != 2022 || s.Network != "Disney+" {
 		t.Errorf("show = %+v", s)
 	}
 	if !strings.HasPrefix(s.Summary, "Andor explores a new perspective") || strings.Contains(s.Summary, "<") {
@@ -146,20 +147,26 @@ func TestShowNotFound(t *testing.T) {
 	}
 }
 
-func TestImages(t *testing.T) {
+func TestBackgrounds(t *testing.T) {
 	c, _ := newTestClient(t, serveFixtures(t, map[string]string{"/shows/52341/images": "images_52341.json"}))
-	got, err := c.Images(context.Background(), 52341)
+	got, err := c.Backgrounds(context.Background(), 52341)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "https://static.tvmaze.com/uploads/images/original_untouched/442/1107093.jpg"; got != want {
-		t.Errorf("widest = %q, want %q", got, want)
+	if len(got) != 12 {
+		t.Fatalf("got %d backgrounds, want the 12 backgrounds", len(got))
+	}
+	if want := "https://static.tvmaze.com/uploads/images/original_untouched/442/1107093.jpg"; got[0].URL != want || got[0].Width != 3840 {
+		t.Errorf("first = %+v, want %q", got[0], want)
 	}
 }
 
-func TestImagesPrefersMainThenNone(t *testing.T) {
+func TestBackgroundsOrder(t *testing.T) {
 	body := `[
-		{"type":"background","main":false,"resolutions":{"original":{"url":"http://x/wide.jpg","width":3840}}},
+		{"type":"background","main":false,"resolutions":{"original":{"url":"http://x/10968.jpg","width":10968}}},
+		{"type":"background","main":false,"resolutions":{"original":{"url":"http://x/1920.jpg","width":1920}}},
+		{"type":"background","main":false,"resolutions":{"original":{"url":"http://x/4240.jpg","width":4240}}},
+		{"type":"background","main":false,"resolutions":{"original":{"url":"http://x/3840.jpg","width":3840}}},
 		{"type":"background","main":true,"resolutions":{"original":{"url":"http://x/main.jpg","width":1280}}},
 		{"type":"poster","main":true,"resolutions":{"original":{"url":"http://x/poster.jpg","width":9999}}}
 	]`
@@ -170,13 +177,36 @@ func TestImagesPrefersMainThenNone(t *testing.T) {
 		}
 		w.Write([]byte(`[{"type":"poster","main":true,"resolutions":{"original":{"url":"http://x/p.jpg","width":680}}},{"type":null,"main":false,"resolutions":{}}]`))
 	}))
-	got, err := c.Images(context.Background(), 1)
-	if err != nil || got != "http://x/main.jpg" {
-		t.Errorf("Images(1) = %q, %v; want main", got, err)
+	got, err := c.Backgrounds(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, err = c.Images(context.Background(), 2)
-	if err != nil || got != "" {
-		t.Errorf("Images(2) = %q, %v; want none", got, err)
+	var urls []string
+	for _, b := range got {
+		urls = append(urls, strings.TrimPrefix(b.URL, "http://x/"))
+	}
+	if want := "main.jpg 3840.jpg 1920.jpg 4240.jpg 10968.jpg"; strings.Join(urls, " ") != want {
+		t.Errorf("order = %v, want %s: main, widest within 3840, then the narrowest wider", urls, want)
+	}
+	if got, err := c.Backgrounds(context.Background(), 2); err != nil || len(got) != 0 {
+		t.Errorf("Backgrounds(2) = %+v, %v; want none", got, err)
+	}
+}
+
+func TestSearchCountry(t *testing.T) {
+	c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`[
+			{"score":0.9,"show":{"id":28826,"name":"Euphoria","premiered":"2019-06-16","network":{"name":"HBO","country":{"name":"United States","code":"US"}},"webChannel":null}},
+			{"score":0.8,"show":{"id":4011,"name":"Euphoria","premiered":"2012-11-11","network":{"name":"HOT3","country":{"code":"IL"}}}},
+			{"score":0.7,"show":{"id":5,"name":"Euphoria Web","webChannel":{"name":"Netflix","country":null}}}
+		]`))
+	}))
+	got, err := c.Search(context.Background(), "euphoria")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Country != "US" || got[0].Network != "HBO" || got[1].Country != "IL" || got[2].Country != "" || got[2].Network != "Netflix" {
+		t.Errorf("results = %+v", got)
 	}
 }
 
@@ -308,9 +338,9 @@ func TestThrottle(t *testing.T) {
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	for range 7 {
+	for i := range 7 {
 		wg.Go(func() {
-			if _, err := c.Search(context.Background(), "x"); err != nil {
+			if _, err := c.Search(context.Background(), fmt.Sprint("x", i)); err != nil {
 				t.Error(err)
 			}
 		})
