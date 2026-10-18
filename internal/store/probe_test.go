@@ -162,7 +162,7 @@ func TestProbe_FK_CascadesMatchDesign(t *testing.T) {
 	if err := f.s.ReplaceFileChapters(f.ctx, files[0].ID, []store.Chapter{{StartS: 0, EndS: 10, Title: "Intro"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.UpsertProgress(f.ctx, e1.ID, 10, 3000, false); err != nil {
+	if _, _, err := f.s.UpsertProgress(f.ctx, e1.ID, 10, 3000, false); err != nil {
 		t.Fatal(err)
 	}
 	f.exec(`UPDATE media_items SET classified_at = NULL WHERE id = ?`, e1.ID)
@@ -289,7 +289,7 @@ func TestProbe_Progress_CreditsToleranceAndFirstOnlineFile(t *testing.T) {
 		{100, false, false},
 		{2850, false, true},
 	} {
-		got, err := f.s.UpsertProgress(f.ctx, item.ID, tc.position, 3000, tc.explicit)
+		got, _, err := f.s.UpsertProgress(f.ctx, item.ID, tc.position, 3000, tc.explicit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -308,13 +308,13 @@ func TestProbe_Progress_CreditsToleranceAndFirstOnlineFile(t *testing.T) {
 	if err := f.s.ReplaceFileChapters(f.ctx, second.ID, []store.Chapter{{StartS: 2300, EndS: 3000, Title: "Credits"}}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := f.s.UpsertProgress(f.ctx, item.ID, 2400, 3000, false); got.Completed {
+	if got, _, _ := f.s.UpsertProgress(f.ctx, item.ID, 2400, 3000, false); got.Completed {
 		t.Errorf("position 2400 completed by the second file's credits while the first file is online")
 	}
 	if err := f.s.SetFileStatus(f.ctx, files[0].ID, "missing"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := f.s.UpsertProgress(f.ctx, item.ID, 2400, 3000, false); !got.Completed {
+	if got, _, _ := f.s.UpsertProgress(f.ctx, item.ID, 2400, 3000, false); !got.Completed {
 		t.Errorf("position 2400 not completed by the first online file's (the second's) credits")
 	}
 }
