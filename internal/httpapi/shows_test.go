@@ -840,6 +840,30 @@ func TestProgressCompletedFlag(t *testing.T) {
 	}
 }
 
+func TestProgressMovesOnFromEarlierEpisode(t *testing.T) {
+	e := newShowsEnv(t)
+	eden := e.show("East of Eden", 2026)
+	e1, e2 := e.episode(eden, 1, 1, "Brothers"), e.episode(eden, 1, 2, "Cathy")
+	e.exec(`INSERT INTO watch_progress (item_id, position_s, duration_s, completed, updated_at) VALUES (?, 2790, 3060, 0, ?)`,
+		e1.ID, store.FormatTime(time.Now().Add(-time.Hour)))
+	evs, cancel := e.srv.bus.Subscribe()
+	defer cancel()
+	e.ok("PUT", "/api/items/"+idStr(e2.ID)+"/progress", `{"position_s": 40, "duration_s": 3660}`, nil)
+	if got, err := e.st.GetProgress(e.ctx, e1.ID); err != nil || !got.Completed {
+		t.Fatalf("E1 progress = %+v, %v; want completed once E2 started", got, err)
+	}
+	for {
+		select {
+		case ev := <-evs:
+			if s, ok := ev.Payload.(store.ItemSummary); ok && ev.Type == events.ItemUpdated && s.ID == e1.ID {
+				return
+			}
+		default:
+			t.Fatal("no item.updated for the episode moved on from")
+		}
+	}
+}
+
 func TestPlayMarkersFromChapters(t *testing.T) {
 	e := newShowsEnv(t)
 	ctx := e.ctx

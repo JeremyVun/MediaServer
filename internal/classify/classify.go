@@ -262,9 +262,9 @@ func (s *Service) Classify(ctx context.Context, itemID int64) error {
 		}
 	}
 
-	q, ok := episodeQuery(f.guess)
+	q, ok := episodeQuery(f.guess, durationS)
 	if locked {
-		q, ok = lockedQuery(item, parsed)
+		q, ok = lockedQuery(item, parsed, durationS)
 	}
 	if ok {
 		if f.lookup, err = s.prepare(ctx, q); err != nil {
@@ -315,24 +315,26 @@ func (s *Service) file(ctx context.Context, itemID int64, f filing) (*artJob, er
 	if f.guess.typ != "episode" {
 		return nil, s.fileNonEpisode(ctx, item, f.guess, f.needsCheck)
 	}
-	return s.fileEpisode(ctx, item, f.guess, f.parsed, f.needsCheck, f.lookup)
+	return s.fileEpisode(ctx, item, f)
 }
 
-func episodeQuery(g guess) (showQuery, bool) {
+func episodeQuery(g guess, durationS float64) (showQuery, bool) {
 	if g.typ != "episode" || g.showKey == "" {
 		return showQuery{}, false
 	}
-	return showQuery{name: g.showName, key: g.showKey, year: g.year, season: g.season, episode: g.episode}, true
+	return showQuery{name: g.showName, key: g.showKey, year: g.year, season: g.season, episode: g.episode,
+		episodeTitle: g.episodeTitle, durationS: durationS}, true
 }
 
 // lockedQuery is the show query of a locked episode that has no show yet,
 // which joins one through its path (build ruling B1).
-func lockedQuery(item store.Item, parsed library.Parsed) (showQuery, bool) {
+func lockedQuery(item store.Item, parsed library.Parsed, durationS float64) (showQuery, bool) {
 	key := derefOr(item.ShowKey, parsed.ShowKey)
 	if item.Type != "episode" || item.ShowID != nil || key == "" {
 		return showQuery{}, false
 	}
-	q := showQuery{name: parsed.ShowName, key: key, year: parsed.Year, season: parsed.Season, episode: parsed.Episode}
+	q := showQuery{name: parsed.ShowName, key: key, year: parsed.Year, season: parsed.Season, episode: parsed.Episode,
+		episodeTitle: parsed.EpisodeTitle, durationS: durationS}
 	if item.Episode != nil {
 		q.season, q.episode, _ = numbers(item)
 	}
@@ -437,7 +439,7 @@ func (s *Service) classifyLocked(ctx context.Context, item store.Item, parsed li
 	}
 	flag := true
 	p.NeedsCheck = &flag
-	q, ok := lockedQuery(item, parsed)
+	q, ok := lockedQuery(item, parsed, durationS)
 	if !ok {
 		s.log.Warn("classify: locked episode has no show name, left pending", "item_id", item.ID)
 		return nil, s.updateItem(ctx, item.ID, p)
@@ -477,8 +479,9 @@ func (s *Service) fileNonEpisode(ctx context.Context, item store.Item, g guess, 
 	})
 }
 
-func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, parsed library.Parsed, needsCheck bool, lk *lookup) (*artJob, error) {
-	itemKey := parsed.ShowKey
+func (s *Service) fileEpisode(ctx context.Context, item store.Item, f filing) (*artJob, error) {
+	g, needsCheck := f.guess, f.needsCheck
+	itemKey := f.parsed.ShowKey
 	if itemKey == "" {
 		itemKey = g.showKey
 	}
@@ -495,7 +498,7 @@ func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, par
 	if g.episodeEnd > 0 {
 		p.EpisodeEnd = store.SetTo(g.episodeEnd)
 	}
-	q, ok := episodeQuery(g)
+	q, ok := episodeQuery(g, f.durationS)
 	if !ok {
 		// Nothing to match on: stay a pending episode with a Check mark
 		// until the owner moves it to a show.
@@ -504,7 +507,7 @@ func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, par
 		s.log.Warn("classify: episode has no show name, left pending", "item_id", item.ID)
 		return nil, s.updateItem(ctx, item.ID, p)
 	}
-	show, created, art, err := s.showFor(ctx, q, lk)
+	show, created, art, err := s.showFor(ctx, q, f.lookup)
 	if err != nil {
 		return nil, err
 	}
@@ -607,6 +610,11 @@ func (s *Service) createMatched(ctx context.Context, lk *lookup) (store.Show, *a
 	show, err := s.store.CreateShow(ctx, store.NewShow{Title: r.Name, Year: yearPtr(r.Year), Network: nonEmpty(r.Network), TVmazeID: &id})
 	if err != nil {
 		return store.Show{}, nil, err
+	}
+	if lk.m.viaAKA {
+		if show, err = s.store.UpdateShow(ctx, show.ID, akaTitle(r.Name)); err != nil {
+			return store.Show{}, nil, err
+		}
 	}
 	s.log.Info("classify: new show matched on TVmaze", "show_id", show.ID, "title", r.Name, "tvmaze_id", r.ID)
 	if lk.showErr != nil {

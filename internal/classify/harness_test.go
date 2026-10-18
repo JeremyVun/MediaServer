@@ -35,6 +35,8 @@ type tvShow struct {
 	poster      bool
 	backdrop    bool
 	backgrounds []tvBackground // served after the backdrop flag's one
+	akas        []string
+	runtimes    []int // minutes, by index into episodes; missing means unknown
 }
 
 type tvBackground struct {
@@ -192,9 +194,19 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 		case parts[2] == "episodes":
 			eps := []any{}
 			for i, e := range show.episodes {
-				eps = append(eps, map[string]any{"id": id*1000 + i, "name": e.title, "season": e.season, "number": e.number, "airdate": e.airdate})
+				ep := map[string]any{"id": id*1000 + i, "name": e.title, "season": e.season, "number": e.number, "airdate": e.airdate}
+				if i < len(show.runtimes) {
+					ep["runtime"] = show.runtimes[i]
+				}
+				eps = append(eps, ep)
 			}
 			writeJSON(w, eps)
+		case parts[2] == "akas":
+			akas := []any{}
+			for _, name := range show.akas {
+				akas = append(akas, map[string]any{"name": name, "country": nil})
+			}
+			writeJSON(w, akas)
 		case parts[2] == "images":
 			imgs := []any{}
 			if show.backdrop {

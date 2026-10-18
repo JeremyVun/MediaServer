@@ -131,6 +131,21 @@ func (c *Client) Episodes(ctx context.Context, id int) ([]Episode, error) {
 	return episodes(eps), nil
 }
 
+// Akas lists the show's alternate names (Vikingane is Norsemen in English).
+func (c *Client) Akas(ctx context.Context, id int) ([]string, error) {
+	var raw []struct {
+		Name string `json:"name"`
+	}
+	if err := c.getJSON(ctx, fmt.Sprintf("/shows/%d/akas", id), &raw); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(raw))
+	for _, a := range raw {
+		names = append(names, a.Name)
+	}
+	return names, nil
+}
+
 // BackgroundMaxWidth is the widest background preferred; wider ones are
 // only offered when nothing narrower exists.
 const BackgroundMaxWidth = 3840

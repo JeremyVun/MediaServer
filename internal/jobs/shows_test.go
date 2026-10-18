@@ -256,7 +256,7 @@ func TestProbeStoresChaptersAndCompletesProgress(t *testing.T) {
 	if err := f.st.UpdateFileProbe(f.ctx, file.ID, store.ProbeResult{Container: "matroska", DurationS: 3300}); err != nil {
 		t.Fatal(err)
 	}
-	progress, err := f.st.UpsertProgress(f.ctx, item.ID, 3100, 3300, false)
+	progress, _, err := f.st.UpsertProgress(f.ctx, item.ID, 3100, 3300, false)
 	if err != nil || progress.Completed {
 		t.Fatalf("setup progress = %+v, %v; 94%% without chapters is not complete", progress, err)
 	}
@@ -461,5 +461,55 @@ func TestAiringRefreshSweep(t *testing.T) {
 	next := f.queued(TypeAiringRefresh)
 	if len(next) != 1 || next[0].ID == sweeps[0].ID {
 		t.Fatalf("sweep did not reschedule itself: %+v", next)
+	}
+}
+
+func TestBackfillCompletesMovedOnEpisodes(t *testing.T) {
+	f := newShowsFixture(t, Options{})
+	show, err := f.st.CreateShow(f.ctx, store.NewShow{Title: "East of Eden"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var eps []store.Item
+	for e := 1; e <= 2; e++ {
+		item := f.create(fmt.Sprintf("East of Eden - S01E%02d.mkv", e))
+		item, err := f.st.UpdateItem(f.ctx, item.ID, store.UpdateItemParams{ShowID: store.SetTo(show.ID),
+			Season: store.SetTo(1), Episode: store.SetTo(e), ClassifiedAt: store.SetTo(store.FormatTime(time.Now()))})
+		if err != nil {
+			t.Fatal(err)
+		}
+		eps = append(eps, item)
+	}
+	for i, at := range []string{"2026-10-19 10:00:00", "2026-10-19 10:50:00"} {
+		if _, err := f.st.DB().ExecContext(f.ctx, `INSERT INTO watch_progress (item_id, position_s, duration_s, completed, updated_at)
+			VALUES (?, 2790, 3060, 0, ?)`, eps[i].ID, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for len(f.evs) > 0 {
+		<-f.evs
+	}
+
+	if err := f.mgr.EnqueueBackfill(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.st.GetProgress(f.ctx, eps[0].ID); err != nil || !got.Completed || got.UpdatedAt != "2026-10-19 10:00:00" {
+		t.Fatalf("E1 progress = %+v, %v; want completed with updated_at kept", got, err)
+	}
+	if got, _ := f.st.GetProgress(f.ctx, eps[1].ID); got.Completed {
+		t.Fatalf("E2 progress = %+v, want in progress: nothing came after it", got)
+	}
+	itemEvent, showEvent := false, false
+	for len(f.evs) > 0 {
+		e := <-f.evs
+		if s, ok := e.Payload.(store.ItemSummary); ok && e.Type == events.ItemUpdated && s.ID == eps[0].ID {
+			itemEvent = true
+		}
+		if m, ok := e.Payload.(map[string]any); ok && e.Type == events.ShowUpdated && m["id"] == show.ID {
+			showEvent = true
+		}
+	}
+	if !itemEvent || !showEvent {
+		t.Fatalf("item.updated %v, show.updated %v; want both", itemEvent, showEvent)
 	}
 }

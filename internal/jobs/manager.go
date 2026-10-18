@@ -213,11 +213,27 @@ func (m *Manager) EnqueueMovieRefresh(ctx context.Context, itemID int64, runAt t
 	return err
 }
 
-// EnqueueBackfill runs at boot: classify every live item still unclassified
-// (the whole library on the first boot after the shows upgrade), match on
-// TMDB every movie never checked when a token is set, and probe every online
-// file whose chapters were never read.
+// EnqueueBackfill runs at boot: complete episodes the viewer moved on from
+// (ruling B12), classify every live item still unclassified (the whole
+// library on the first boot after the shows upgrade), match on TMDB every
+// movie never checked when a token is set, and probe every online file whose
+// chapters were never read.
 func (m *Manager) EnqueueBackfill(ctx context.Context) error {
+	movedOn, err := m.store.CompleteMovedOnEpisodes(ctx)
+	if err != nil {
+		return err
+	}
+	if len(movedOn) > 0 {
+		m.log.Info("episodes moved on from marked watched", "items", len(movedOn))
+	}
+	shows := map[int64]bool{}
+	for _, mo := range movedOn {
+		m.publishItemSummary(ctx, mo.ItemID)
+		if !shows[mo.ShowID] {
+			shows[mo.ShowID] = true
+			m.publish(events.Event{Type: events.ShowUpdated, Payload: map[string]any{"id": mo.ShowID}})
+		}
+	}
 	if m.classify != nil {
 		ids, err := m.store.ListUnclassifiedItemIDs(ctx)
 		if err != nil {

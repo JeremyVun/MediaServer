@@ -199,7 +199,7 @@ func TestWatchProgressUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create item: %v", err)
 	}
-	progress, err := s.UpsertProgress(ctx, item.ID, 50, 100, false)
+	progress, _, err := s.UpsertProgress(ctx, item.ID, 50, 100, false)
 	if err != nil {
 		t.Fatalf("insert progress: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestWatchProgressUpsert(t *testing.T) {
 		t.Fatalf("progress = %+v", got)
 	}
 
-	progress, err = s.UpsertProgress(ctx, item.ID, 95, 100, false)
+	progress, _, err = s.UpsertProgress(ctx, item.ID, 95, 100, false)
 	if err != nil {
 		t.Fatalf("update progress: %v", err)
 	}
@@ -279,13 +279,13 @@ func TestListItemsInProgressFilter(t *testing.T) {
 	finished, _ := s.CreateItem(ctx, store.NewItem{Title: "finished"})
 	startedLater, _ := s.CreateItem(ctx, store.NewItem{Title: "started later"})
 
-	if _, err := s.UpsertProgress(ctx, started.ID, 60, 600, false); err != nil {
+	if _, _, err := s.UpsertProgress(ctx, started.ID, 60, 600, false); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
-	if _, err := s.UpsertProgress(ctx, finished.ID, 590, 600, false); err != nil { // ≥95% ⇒ completed
+	if _, _, err := s.UpsertProgress(ctx, finished.ID, 590, 600, false); err != nil { // ≥95% ⇒ completed
 		t.Fatalf("progress: %v", err)
 	}
-	if _, err := s.UpsertProgress(ctx, startedLater.ID, 30, 600, false); err != nil {
+	if _, _, err := s.UpsertProgress(ctx, startedLater.ID, 30, 600, false); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
 

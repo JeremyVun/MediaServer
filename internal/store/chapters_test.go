@@ -128,7 +128,7 @@ func TestUpsertProgressCompletion(t *testing.T) {
 		{"rewatch resets despite credits", withCredits, 10, 3960, false, false},
 	}
 	for _, step := range steps {
-		got, err := f.s.UpsertProgress(f.ctx, step.item.ID, step.position, step.duration, step.explicit)
+		got, _, err := f.s.UpsertProgress(f.ctx, step.item.ID, step.position, step.duration, step.explicit)
 		if err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
@@ -145,7 +145,7 @@ func TestUpsertProgressCompletion(t *testing.T) {
 	// file's chapters are known, without moving its timestamp.
 	stuck := f.item("episode", "Below E1", 3000)
 	stuckFiles, _ := f.s.ListFilesForItem(f.ctx, stuck.ID)
-	if _, err := f.s.UpsertProgress(f.ctx, stuck.ID, 2700, 3000, false); err != nil {
+	if _, _, err := f.s.UpsertProgress(f.ctx, stuck.ID, 2700, 3000, false); err != nil {
 		t.Fatal(err)
 	}
 	f.exec(`UPDATE watch_progress SET updated_at = '2026-08-01 20:00:00' WHERE item_id = ?`, stuck.ID)
@@ -167,7 +167,7 @@ func TestUpsertProgressCompletion(t *testing.T) {
 	// Below E5 stopped 5.5 s short of its credits chapter (ruling B7).
 	short := f.item("episode", "Below E5", 2700)
 	shortFiles, _ := f.s.ListFilesForItem(f.ctx, short.ID)
-	if _, err := f.s.UpsertProgress(f.ctx, short.ID, 2291.95, 2700, false); err != nil {
+	if _, _, err := f.s.UpsertProgress(f.ctx, short.ID, 2291.95, 2700, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.ReplaceFileChapters(f.ctx, shortFiles[0].ID, []store.Chapter{{StartS: 2297.45, EndS: 2700, Title: "Credits"}}); err != nil {
@@ -178,7 +178,7 @@ func TestUpsertProgressCompletion(t *testing.T) {
 	}
 	tooShort := f.item("episode", "Stopped 10.1 s short", 2700)
 	tooShortFiles, _ := f.s.ListFilesForItem(f.ctx, tooShort.ID)
-	if _, err := f.s.UpsertProgress(f.ctx, tooShort.ID, 2287.35, 2700, false); err != nil {
+	if _, _, err := f.s.UpsertProgress(f.ctx, tooShort.ID, 2287.35, 2700, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.s.ReplaceFileChapters(f.ctx, tooShortFiles[0].ID, []store.Chapter{{StartS: 2297.45, EndS: 2700, Title: "Credits"}}); err != nil {

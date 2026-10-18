@@ -223,10 +223,12 @@ func (s *Service) adopt(ctx context.Context, show store.Show, lk *lookup) (store
 		return store.Show{}, nil, staleLookup{lk.q}
 	}
 	clear := false
-	if show, err = s.store.UpdateShow(ctx, show.ID, store.UpdateShowParams{
-		TVmazeID:   store.SetTo(id),
-		NeedsCheck: &clear,
-	}); err != nil {
+	p := store.UpdateShowParams{TVmazeID: store.SetTo(id), NeedsCheck: &clear}
+	if lk.m.viaAKA && !show.TitleLocked {
+		p = akaTitle(lk.m.result.Name)
+		p.TVmazeID, p.NeedsCheck = store.SetTo(id), &clear
+	}
+	if show, err = s.store.UpdateShow(ctx, show.ID, p); err != nil {
 		return store.Show{}, nil, err
 	}
 	if lk.showErr != nil {
@@ -277,6 +279,13 @@ func (s *Service) applyMetadata(ctx context.Context, show store.Show, tv tvmaze.
 		return show, nil, nil
 	}
 	return show, &artJob{showID: show.ID, tvmazeID: *show.TVmazeID, posterURL: tv.PosterURL}, nil
+}
+
+// akaTitle keeps the alternate name a show was matched by (ruling B13):
+// locked, so refreshes never swap it back to TVmaze's primary name.
+func akaTitle(name string) store.UpdateShowParams {
+	locked := true
+	return store.UpdateShowParams{Title: &name, TitleLocked: &locked}
 }
 
 // maxBackgroundAttempts bounds how many dead background links are tried.
