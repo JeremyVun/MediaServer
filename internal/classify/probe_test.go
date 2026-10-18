@@ -476,3 +476,47 @@ func derefInt64(p *int64) int64 {
 	}
 	return *p
 }
+
+// probe: later arrivals that can match a flagged unmatched show, racing each other and an arrival under another key for the same TVmaze show, leave exactly one show holding the match (B7.4 vs concurrent arrivals).
+func TestProbe_Concurrency_UpgradeRacesOtherKeys(t *testing.T) {
+	for run := 0; run < 5; run++ {
+		h := newHarness(t)
+		lionessShows(h)
+		h.tv.delay = 15 * time.Millisecond
+		first := h.classify(h.item("Lioness.S03E01.mkv", 3000).ID)
+		var ids []int64
+		for _, p := range []string{"Lioness.2023.S03E02.mkv", "Lioness.2023.S03E03.mkv", "Lioness.S03E04.mkv", "Lioness.US.S03E05.mkv", "Lioness.US.S03E06.mkv"} {
+			ids = append(ids, h.item(p, 3000).ID)
+		}
+		var wg sync.WaitGroup
+		errs := make(chan error, len(ids))
+		for _, id := range ids {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errs <- h.svc.Classify(context.Background(), id)
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		h.invariant()
+		shows := h.shows()
+		if len(shows) != 1 || shows[0].TVmazeID == nil || *shows[0].TVmazeID != 50415 {
+			var got []string
+			for _, s := range shows {
+				got = append(got, fmt.Sprintf("%d:%s tvmaze=%d", s.ID, s.Title, derefInt64(s.TVmazeID)))
+			}
+			t.Fatalf("run %d: shows = %v, want one show matched to 50415", run, got)
+		}
+		for _, id := range append(ids, first.ID) {
+			if got := h.get(id); got.ShowID == nil || *got.ShowID != shows[0].ID {
+				t.Fatalf("run %d: item %d in show %d, want %d", run, id, derefInt64(got.ShowID), shows[0].ID)
+			}
+		}
+	}
+}
