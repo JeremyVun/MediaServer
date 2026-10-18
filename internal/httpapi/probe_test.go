@@ -411,3 +411,37 @@ func TestProbe_Rules_ChildProcessesHaveContextAndTimeout(t *testing.T) {
 		}
 	}
 }
+
+// probe: media files are deleted only by the trash purge: every os.Remove/RemoveAll call site is one of these, each removing its own scratch, cache or art.
+func TestProbe_Destroy_RemoveCallSitesAreKnown(t *testing.T) {
+	known := map[string]string{
+		"internal/httpapi/trash.go":      "trash purge (the one media-file delete)",
+		"internal/jobs/manager.go":       "trash purge job and stale upload part files",
+		"internal/httpapi/uploads.go":    "upload part files",
+		"internal/httpapi/settings.go":   "HLS cache dir write probe",
+		"internal/classify/shows.go":     "show art of dead or re-matched shows, art temp files",
+		"internal/classify/movies.go":    "movie backdrops of purged or retyped items, temp files",
+		"internal/classify/art.go":       "art download temp files",
+		"internal/tvmaze/client.go":      "image download temp file",
+		"internal/tmdb/client.go":        "image download temp file",
+		"internal/semantic/semantic.go":  "codex temp working dir",
+		"internal/playback/session.go":   "HLS session cache dirs",
+		"internal/playback/subtitles.go": "subtitle temp files",
+		"internal/playback/keyframes.go": "keyframe temp file",
+		"internal/logging/logging.go":    "log rotation",
+	}
+	for path, f := range goFiles(t, "internal", "cmd") {
+		ast.Inspect(f, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := sel.X.(*ast.Ident); ok && id.Name == "os" && (sel.Sel.Name == "Remove" || sel.Sel.Name == "RemoveAll") {
+				if _, ok := known[path]; !ok {
+					t.Errorf("%s calls os.%s: review that it can never delete a media file, then list it here", path, sel.Sel.Name)
+				}
+			}
+			return true
+		})
+	}
+}
