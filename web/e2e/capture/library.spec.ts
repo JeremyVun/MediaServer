@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { test } from '@playwright/test'
+import { test, type Route } from '@playwright/test'
 import { itemEntry, mockLibraryApi, showEntry, upNext } from '../support/library'
 
 const IMG = process.env.EXEMPLAR_IMG ?? '/Users/jeremy/projects/media-server/docs/backlog/shows/comps/r3/workshop/img'
@@ -28,7 +28,7 @@ const mock = {
   shows: {},
 }
 
-const serve = async (route: any, file: string) => route.fulfill({ status: 200, contentType: 'image/jpeg', body: readFileSync(file) })
+const serve = async (route: Route, file: string) => route.fulfill({ status: 200, contentType: 'image/jpeg', body: readFileSync(file) })
 
 for (const [name, viewport, scale] of [['phone', { width: 390, height: 844 }, 2], ['desktop', { width: 1440, height: 900 }, 2]] as const) {
   test(`library ${name}`, async ({ browser }) => {
