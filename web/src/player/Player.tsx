@@ -1,6 +1,10 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -11,10 +15,12 @@ import type Hls from 'hls.js'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import {
   ArrowLeft,
+  ArrowRight,
   AudioLines,
   Cast,
   Captions,
   ChevronDown,
+  ListVideo,
   Loader2,
   Maximize,
   Minimize,
@@ -31,24 +37,38 @@ import {
   deletePlaybackSession,
   saveProgressBeacon,
   useItem,
+  usePlayerShow,
   useSaveProgress,
 } from '../api/queries.ts'
-import type { MediaStream, Quality, QualityRung } from '../api/types.ts'
+import type { MediaStream, ProgressUpdate, Quality, QualityRung } from '../api/types.ts'
 import { parseResumeOverride } from '../lib/searchParams.ts'
 import { Button, IconButton, Menu, MenuItem } from '../ui/index.ts'
 import { AudioOnlyBackdrop } from './AudioOnlyBackdrop.tsx'
+import { EPISODES_TRIGGER } from './episodesTrigger.ts'
 import { mediaSessionMetadata } from './mediaSession.ts'
 import { qualityAfterItemChange, readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
 import { Clock, SeekBar } from './SeekBar.tsx'
 import { usePlaybackSession } from './usePlaybackSession.ts'
 import {
+  cardMode,
+  inIntro,
+  nextEpisode,
+  pastCardStart,
+  progressCompleted,
+  wantsNextEpisode,
+} from './nextEpisode.ts'
+import {
   clampSkip,
   isDoubleTap,
   mouseClickDecision,
+  playerTitles,
   pointerRoute,
   seekDirection,
   touchTapAction,
 } from './playerLogic.ts'
+
+const EpisodesPopover = lazy(() => import('./EpisodesPopover.tsx'))
+const NextEpisodeCard = lazy(() => import('./NextEpisodeCard.tsx'))
 
 type AirPlayVideo = HTMLVideoElement & {
   webkitShowPlaybackTargetPicker?: () => void
@@ -72,6 +92,15 @@ type FullscreenDocument = Document & {
 
 // A seek badge flashed on double-tap; `nonce` restarts the fade timer.
 type SeekIndicator = { direction: -1 | 1; seconds: number; nonce: number }
+
+// Tagged with the item whose source produced it, so a write never lands on
+// the item the player has since switched to.
+type PositionSample = { itemID: number; position_s: number; duration_s: number; creditsStartS?: number }
+
+// Choices that belong to one item: stream indexes are per file, and a
+// dismissed Next card or the halfway lookup must not carry to the next episode.
+type ItemChoices = { itemID: number; subtitle: number | null; audio: number | null; wantsNext: boolean; dismissed: boolean }
+const freshChoices = (itemID: number): ItemChoices => ({ itemID, subtitle: null, audio: null, wantsNext: false, dismissed: false })
 
 const NO_QUALITIES: QualityRung[] = []
 
@@ -130,7 +159,17 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   // see whether the help sheet is open.
   const helpOpenRef = useRef(false)
   const item = useItem(itemID)
-  const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number | null>(null)
+  // Reset in the render that sees a new id, so the new item's first /play
+  // never carries the old file's stream picks.
+  const [storedChoices, setChoices] = useState<ItemChoices>(() => freshChoices(itemID))
+  const choices = storedChoices.itemID === itemID ? storedChoices : freshChoices(itemID)
+  if (storedChoices.itemID !== itemID) setChoices(choices)
+  const updateChoices = useCallback(
+    (change: Partial<Omit<ItemChoices, 'itemID'>>) =>
+      setChoices((prev) => (prev.itemID === itemID ? { ...prev, ...change } : prev)),
+    [itemID],
+  )
+  const selectedSubtitleIndex = choices.subtitle
   const activeFile = useMemo(() => {
     const files = item.data?.files ?? []
     if (fileID != null) return files.find((file) => file.id === fileID) ?? null
@@ -148,7 +187,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     selectedSubtitle && isImageSubtitleCodec(selectedSubtitle.codec) ? selectedSubtitle.stream_index : null
   const textSubtitleIndex =
     selectedSubtitle && isTextSubtitleCodec(selectedSubtitle.codec) ? selectedSubtitle.stream_index : null
-  const [selectedAudioIndex, setSelectedAudioIndex] = useState<number | null>(null)
+  const selectedAudioIndex = choices.audio
   const audioOptions = useMemo(
     () => activeFile?.streams.filter((stream) => stream.kind === 'audio') ?? [],
     [activeFile],
@@ -183,7 +222,11 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       : qualityAfterItemChange(requested.quality, readStoredQuality())
   if (requested.itemID !== itemID) setRequested({ itemID, quality: requestedQuality })
   const session = usePlaybackSession(itemID, fileID, burnInSubtitleIndex, sessionAudioIndex, requestedQuality)
-  const { mutate: saveProgressMutate } = useSaveProgress(itemID)
+  const { mutate: saveProgressMutate, mutateAsync: saveProgressAsync } = useSaveProgress(itemID)
+  const markers = session.data?.markers
+  const episodeShow = item.data?.type === 'episode' ? item.data.show : null
+  const showID = episodeShow?.id ?? null
+  const isEpisode = showID != null
 
   const [paused, setPaused] = useState(true)
   const [muted, setMuted] = useState(false)
@@ -227,19 +270,41 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const [coarsePointer] = useState(
     () => typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches === true,
   )
+  // Position-derived flags, set from `timeupdate` only when they flip so the
+  // player doesn't re-render at 4 Hz.
+  const [introActive, setIntroActive] = useState(false)
+  const [pastStart, setPastStart] = useState(false)
+  const [ended, setEnded] = useState(false)
+  const [episodesMounted, setEpisodesMounted] = useState(false)
+  const [episodesOpen, setEpisodesOpen] = useState(false)
+  // Bottom offset that keeps Skip intro and the Next card clear of the
+  // control bar while it shows.
+  const [lift, setLift] = useState<number | null>(null)
+  const episodesID = useId()
 
   // Last observed playback position, refreshed on every timeupdate. The
   // unmount save (back navigation) runs after React has already detached
   // videoRef, so it must read from here — reading the <video> element at that
   // point returns nothing and the final position would be silently dropped.
-  const lastProgress = useRef<{ position_s: number; duration_s: number } | null>(null)
+  const lastProgress = useRef<PositionSample | null>(null)
+  // The item and credits marker of the source attached to <video>; null while
+  // none is. Set by the session effect, so events from a source that is being
+  // torn down are never credited to the item just switched to.
+  const source = useRef<{ itemID: number; creditsStartS?: number } | null>(null)
+  // The item the viewer advanced from via the Next card: its trailing saves
+  // keep `completed`, so the unmount flush can't undo the advance.
+  const advancedItem = useRef<number | null>(null)
+  const advancing = useRef(false)
 
   const progressPayload = useCallback(() => {
     const video = videoRef.current
-    if (video && Number.isFinite(video.duration) && video.duration > 0) {
+    const current = source.current
+    if (current && video && Number.isFinite(video.duration) && video.duration > 0) {
       lastProgress.current = {
+        itemID: current.itemID,
         position_s: video.currentTime,
         duration_s: video.duration,
+        creditsStartS: current.creditsStartS,
       }
     }
     return lastProgress.current
@@ -247,8 +312,13 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
 
   const persistProgress = useCallback(
     (beacon = false) => {
-      const payload = progressPayload()
-      if (!payload) return
+      const sample = progressPayload()
+      if (!sample || sample.itemID !== itemID) return
+      const payload: ProgressUpdate = { position_s: sample.position_s, duration_s: sample.duration_s }
+      const advanced = advancedItem.current === itemID
+      if (progressCompleted({ positionS: sample.position_s, creditsStartS: sample.creditsStartS, advanced })) {
+        payload.completed = true
+      }
       if (beacon) {
         saveProgressBeacon(itemID, payload)
       } else {
@@ -259,25 +329,30 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   )
 
   // Navigating between items reuses this component; the old item's final
-  // position has already been flushed by the effect cleanup below, so drop it
-  // before the new item's first save can pick it up.
+  // position has already been flushed by the effect cleanups, which run
+  // before this, so drop every per-item ref before the new item starts.
   useEffect(() => {
     lastProgress.current = null
+    pendingSeek.current = null
+    advancedItem.current = null
+    advancing.current = false
   }, [itemID])
 
-  const itemTitle = item.data?.title
+  const titles = item.data ? playerTitles(item.data) : null
+  const mediaTitle = titles?.mediaTitle
+  const mediaArtist = titles?.mediaArtist
   const itemThumbURL = item.data?.thumb_url
   // Lock-screen and Control Centre metadata. No action handlers: the browser
   // drives play/pause through the element on its own.
   useEffect(() => {
-    if (!('mediaSession' in navigator) || itemTitle == null) return
+    if (!('mediaSession' in navigator) || mediaTitle == null) return
     navigator.mediaSession.metadata = new MediaMetadata(
-      mediaSessionMetadata(itemTitle, itemThumbURL ?? '', window.location.origin),
+      mediaSessionMetadata(mediaTitle, itemThumbURL ?? '', window.location.origin, mediaArtist),
     )
     return () => {
       navigator.mediaSession.metadata = null
     }
-  }, [itemTitle, itemThumbURL])
+  }, [mediaTitle, mediaArtist, itemThumbURL])
 
   // paused mirrored in a ref so the self-rescheduling hide tick reads the live
   // value without being torn down and rebuilt on every play/pause.
@@ -342,6 +417,42 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     [registerActivity],
   )
 
+  const onEpisodesOpenChange = useCallback(
+    (open: boolean) => {
+      setEpisodesOpen(open)
+      onMenuOpenChange(open)
+    },
+    [onMenuOpenChange],
+  )
+
+  const switchTo = useCallback(
+    (nextItemID: number) => navigate(`/watch/${nextItemID}`, { replace: true, state: location.state }),
+    [location.state, navigate],
+  )
+
+  const showData = usePlayerShow(showID, choices.wantsNext).data
+  const upNext = showData && isEpisode ? nextEpisode(showData, itemID) : null
+  const card = upNext ? cardMode({ pastStart, ended, dismissed: choices.dismissed }) : 'hidden'
+
+  // The completed write lands before the switch, so the show's up-next has
+  // moved on by the time anything refetches it.
+  const advance = useCallback(async () => {
+    if (!upNext || advancing.current) return
+    advancing.current = true
+    advancedItem.current = itemID
+    const sample = progressPayload()
+    const fallback = { position_s: duration, duration_s: duration }
+    const position = sample?.itemID === itemID ? sample : fallback
+    try {
+      await saveProgressAsync({ position_s: position.position_s, duration_s: position.duration_s, completed: true })
+    } catch {
+      // The switch still happens; the server also counts the credits as watched.
+    }
+    switchTo(upNext.id)
+  }, [duration, itemID, progressPayload, saveProgressAsync, switchTo, upNext])
+
+  const dismissCard = useCallback(() => updateChoices({ dismissed: true }), [updateChoices])
+
   // Debounce the spinner ~250ms so a routine seek (which briefly fires
   // `waiting`) doesn't flash it; `canplay`/`playing`/`timeupdate` clear it.
   const showBuffering = useCallback(() => {
@@ -405,9 +516,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       const currentBurnIn = selectedSubtitle != null && isImageSubtitleCodec(selectedSubtitle.codec)
       const nextBurnIn = next != null && isImageSubtitleCodec(next.codec)
       if (currentBurnIn || nextBurnIn) rememberPosition()
-      setSelectedSubtitleIndex(streamIndex)
+      updateChoices({ subtitle: streamIndex })
     },
-    [rememberPosition, selectedSubtitle, subtitleOptions],
+    [rememberPosition, selectedSubtitle, subtitleOptions, updateChoices],
   )
 
   const selectAudio = useCallback(
@@ -416,9 +527,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       const nextSessionIndex =
         next && next.stream_index !== defaultAudio?.stream_index ? next.stream_index : null
       if (nextSessionIndex !== sessionAudioIndex) rememberPosition()
-      setSelectedAudioIndex(streamIndex)
+      updateChoices({ audio: streamIndex })
     },
-    [audioOptions, defaultAudio, rememberPosition, sessionAudioIndex],
+    [audioOptions, defaultAudio, rememberPosition, sessionAudioIndex, updateChoices],
   )
 
   const selectQuality = useCallback(
@@ -447,6 +558,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     setVideoError(false)
     resumed.current = false
     video.removeAttribute('src')
+    source.current = { itemID, creditsStartS: session.data.markers?.credits_start_s }
 
     const url = session.data.url
     const attachHlsJs = () => {
@@ -504,6 +616,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
 
     return () => {
       cancelled = true
+      source.current = null
       nativeHlsFallback.current = null
       hlsRef.current?.destroy()
       hlsRef.current = null
@@ -513,7 +626,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
     // session.dataUpdatedAt changes on every fetch, including a refetch that
     // resolves to a structurally-shared (reference-equal) `data` — needed so
     // the Retry button actually reloads the element for direct-play sessions.
-  }, [session.capabilities.native_hls, session.data, session.dataUpdatedAt])
+  }, [itemID, session.capabilities.native_hls, session.data, session.dataUpdatedAt])
 
   useEffect(() => {
     const sessionID = session.data?.session_id
@@ -567,6 +680,18 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
       armHideTimer()
     }
   }, [paused, armHideTimer])
+
+  const chromeShown = controlsVisible || paused
+  useLayoutEffect(() => {
+    if (!isEpisode) return
+    const measure = () => {
+      const seek = containerRef.current?.querySelector('[data-seek]')
+      setLift(chromeShown && seek ? window.innerHeight - seek.getBoundingClientRect().top + 8 : null)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [chromeShown, isEpisode])
 
   // Clear any dangling timers on unmount.
   useEffect(
@@ -775,13 +900,21 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           if (time !== lastTime.current) clearBuffering()
           lastTime.current = time
           const duration = e.currentTarget.duration
-          if (Number.isFinite(duration) && duration > 0) {
-            lastProgress.current = { position_s: time, duration_s: duration }
-          }
+          const current = source.current
+          if (!current || current.itemID !== itemID || !Number.isFinite(duration) || duration <= 0) return
+          lastProgress.current = { itemID, position_s: time, duration_s: duration, creditsStartS: current.creditsStartS }
+          if (!isEpisode) return
+          setIntroActive(inIntro(time, markers))
+          const past = pastCardStart(time, duration, markers)
+          setPastStart(past)
+          if (!past && choices.dismissed) updateChoices({ dismissed: false })
+          if (!choices.wantsNext && wantsNextEpisode(time, duration)) updateChoices({ wantsNext: true })
         }}
+        onEnded={() => setEnded(true)}
         onDurationChange={(e) => setDuration(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : 0)}
         onSeeking={(e) => {
           lastTime.current = e.currentTarget.currentTime
+          setEnded(false)
         }}
         onWaiting={showBuffering}
         onPlaying={clearBuffering}
@@ -790,6 +923,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
         onEmptied={() => {
           setPlayingHeight(0)
           clearBuffering()
+          setIntroActive(false)
+          setPastStart(false)
+          setEnded(false)
         }}
         onPlay={() => setPaused(false)}
         onPause={() => {
@@ -885,18 +1021,35 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           hoveringControls.current = false
         }}
         className={[
-          'absolute inset-x-0 top-0 flex items-center justify-between p-4 transition-opacity duration-[var(--duration-base)]',
+          'absolute inset-x-0 top-0 flex items-center justify-between gap-4 p-4 transition-opacity duration-[var(--duration-base)]',
           controlsVisible || paused ? 'opacity-100' : 'pointer-events-none opacity-0',
         ].join(' ')}
       >
         <button
           type="button"
           onClick={goBack}
-          className="inline-flex cursor-pointer items-center gap-2 rounded-sm text-sm text-primary"
+          className="inline-flex min-w-0 cursor-pointer items-center gap-2 rounded-sm text-sm text-primary"
         >
-          <ArrowLeft aria-hidden className="size-4" strokeWidth={1.75} />
-          {item.data?.title ?? 'Details'}
+          <ArrowLeft aria-hidden className="size-4 shrink-0" strokeWidth={1.75} />
+          <span className="truncate">{titles?.heading ?? 'Details'}</span>
         </button>
+        {isEpisode && (
+          <button
+            type="button"
+            {...{ [EPISODES_TRIGGER]: 'top' }}
+            popoverTarget={episodesID}
+            aria-label="Episodes"
+            aria-haspopup="dialog"
+            aria-expanded={episodesOpen}
+            onClick={() => setEpisodesMounted(true)}
+            className={[
+              '-my-3 -mr-2 inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-primary sm:hidden',
+              episodesOpen ? 'bg-accent-subtle' : '',
+            ].join(' ')}
+          >
+            <ListVideo aria-hidden className="size-5" strokeWidth={1.75} />
+          </button>
+        )}
       </div>
 
       <div
@@ -1087,6 +1240,24 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
               <Cast aria-hidden className="size-5" strokeWidth={1.75} />
             </IconButton>
           )}
+          {isEpisode && (
+            <button
+              type="button"
+              {...{ [EPISODES_TRIGGER]: 'bar' }}
+              popoverTarget={episodesID}
+              aria-label="Episodes"
+              aria-haspopup="dialog"
+              aria-expanded={episodesOpen}
+              onClick={() => setEpisodesMounted(true)}
+              className={[
+                'text-primary hidden h-11 cursor-pointer items-center gap-2 rounded-md px-3 text-sm sm:inline-flex',
+                episodesOpen ? 'bg-accent-subtle' : 'hover:bg-accent-subtle',
+              ].join(' ')}
+            >
+              <ListVideo aria-hidden className="size-4 text-secondary" strokeWidth={1.75} />
+              Episodes
+            </button>
+          )}
           <IconButton aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
             {fullscreen ? (
               <Minimize aria-hidden className="size-5" strokeWidth={1.75} />
@@ -1096,6 +1267,48 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           </IconButton>
         </div>
       </div>
+
+      {isEpisode && introActive && markers?.intro && (
+        <button
+          type="button"
+          data-player-controls
+          onClick={() => {
+            const video = videoRef.current
+            if (video && markers.intro) video.currentTime = markers.intro.end_s
+          }}
+          style={lift != null ? { bottom: lift } : undefined}
+          className="text-primary absolute bottom-6 left-1 inline-flex h-11 cursor-pointer items-center gap-2 rounded-md px-3 text-base font-medium transition-[bottom] duration-[var(--duration-base)] sm:bottom-10 sm:left-9"
+        >
+          Skip intro
+          <ArrowRight aria-hidden className="size-4" strokeWidth={1.75} />
+        </button>
+      )}
+
+      {upNext && card !== 'hidden' && (
+        <Suspense fallback={null}>
+          <NextEpisodeCard
+            key={`${upNext.id}-${card}`}
+            episode={upNext}
+            countdown={card === 'countdown'}
+            running={!paused || ended}
+            lift={lift}
+            onPlay={() => void advance()}
+            onDismiss={dismissCard}
+          />
+        </Suspense>
+      )}
+
+      {showID != null && episodesMounted && (
+        <Suspense fallback={null}>
+          <EpisodesPopover
+            id={episodesID}
+            showID={showID}
+            currentItemID={itemID}
+            onPick={switchTo}
+            onOpenChange={onEpisodesOpenChange}
+          />
+        </Suspense>
+      )}
 
       {helpOpen && <KeyboardHelpSheet onClose={() => setHelpOpen(false)} />}
     </main>

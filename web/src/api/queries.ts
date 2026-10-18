@@ -539,3 +539,14 @@ export function useShowList(enabled = true) {
     enabled,
   })
 }
+
+/** The player's show lookup, idle until `enabled` (first popover open, or
+    halfway through the episode) so nothing runs before first frame. Shares
+    `useShow`'s cache. */
+export function usePlayerShow(id: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['show', id],
+    queryFn: () => api<ShowDetail>(`/api/shows/${id}`),
+    enabled: id != null && enabled,
+  })
+}

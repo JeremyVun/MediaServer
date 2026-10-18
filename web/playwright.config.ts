@@ -22,6 +22,8 @@ const chromiumPath = browserPath(
   'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
 )
 const webkitPath = browserPath(webkit.executablePath(), 'webkit-', 'pw_run.sh')
+// Parallel worktrees each need their own dev server port.
+const port = process.env.E2E_PORT ?? '4173'
 const launch = (executablePath: string | undefined) => (executablePath ? { launchOptions: { executablePath } } : {})
 
 export default defineConfig({
@@ -33,12 +35,12 @@ export default defineConfig({
   },
   reporter: [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: `http://127.0.0.1:${port}`,
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
+    command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
+    url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     timeout: 30_000,
   },
