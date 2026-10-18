@@ -44,7 +44,8 @@ func newMissingFixture(t *testing.T, n int) *missingFixture {
 	logs := &bytes.Buffer{}
 	mgr := NewManager(Options{
 		Store: st, Bus: bus, ThumbsDir: t.TempDir(),
-		Log: slog.New(slog.NewTextHandler(logs, nil)),
+		Log:     slog.New(slog.NewTextHandler(logs, nil)),
+		FFprobe: testScript(t, "ffprobe", fakeFFprobe),
 	})
 	f := &missingFixture{t: t, ctx: context.Background(), st: st, mgr: mgr, root: root, evs: evs, logs: logs,
 		paths: map[int64]string{}}
@@ -402,34 +403,43 @@ func TestTrashMissingNeverTrashesFromUnreadableRoot(t *testing.T) {
 }
 
 func TestTrashMissingMassVanishGuard(t *testing.T) {
-	t.Run("over 20 percent", func(t *testing.T) {
-		f := newMissingFixture(t, 10)
-		for _, it := range f.items[:3] {
-			f.remove(f.paths[it.ID])
-		}
-		f.reconcile()
-		f.sweepAt(11 * time.Minute)
-		if _, trashed := f.liveTrashedCount(); trashed != 0 {
-			t.Fatalf("trashed %d with 3 of 10 files missing", trashed)
-		}
-		logs := f.logs.String()
-		for _, want := range []string{"level=WARN", "too many missing", "name=Media", "missing=3", "files=10"} {
-			if !strings.Contains(logs, want) {
-				t.Fatalf("warning lacks %q: %s", want, logs)
+	cases := []struct {
+		files, missing int
+		blocked        bool
+	}{
+		{files: 4, missing: 1},                  // 25 %, but too few to suspect the volume
+		{files: 40, missing: 10},                // 25 %, still only 10 files
+		{files: 40, missing: 11, blocked: true}, // over both limits
+		{files: 60, missing: 12},                // 12 files, but exactly 20 %
+	}
+	for _, c := range cases {
+		t.Run(fmt.Sprintf("%d of %d", c.missing, c.files), func(t *testing.T) {
+			f := newMissingFixture(t, c.files)
+			for _, it := range f.items[:c.missing] {
+				f.remove(f.paths[it.ID])
 			}
-		}
-	})
-	t.Run("exactly 20 percent", func(t *testing.T) {
-		f := newMissingFixture(t, 10)
-		for _, it := range f.items[:2] {
-			f.remove(f.paths[it.ID])
-		}
-		f.reconcile()
-		f.sweepAt(11 * time.Minute)
-		if _, trashed := f.liveTrashedCount(); trashed != 2 {
-			t.Fatalf("trashed %d with 2 of 10 files missing, want 2", trashed)
-		}
-	})
+			f.reconcile()
+			f.sweepAt(11 * time.Minute)
+			want := c.missing
+			if c.blocked {
+				want = 0
+			}
+			if _, trashed := f.liveTrashedCount(); trashed != want {
+				t.Fatalf("trashed %d, want %d", trashed, want)
+			}
+			warned := strings.Contains(f.logs.String(), "too many missing")
+			if warned != c.blocked {
+				t.Fatalf("warning logged = %v, want %v: %s", warned, c.blocked, f.logs.String())
+			}
+			if c.blocked {
+				for _, want := range []string{"level=WARN", "name=Media", fmt.Sprintf("missing=%d", c.missing), fmt.Sprintf("files=%d", c.files)} {
+					if !strings.Contains(f.logs.String(), want) {
+						t.Fatalf("warning lacks %q: %s", want, f.logs.String())
+					}
+				}
+			}
+		})
+	}
 }
 
 func TestTrashMissingKeepsPartlyMissingItem(t *testing.T) {
@@ -584,4 +594,189 @@ func TestTrashMissingTakesAShowOffTheGrid(t *testing.T) {
 	if removed != 2 || showUpdates != 1 {
 		t.Fatalf("item.removed %d, show.updated %d; want 2 and 1", removed, showUpdates)
 	}
+}
+
+// autoTrash takes item's file off the root and lets the sweep trash it.
+func (f *missingFixture) autoTrash(item store.Item) (away string) {
+	f.t.Helper()
+	away = filepath.Join(f.t.TempDir(), "away.mkv")
+	if err := os.Rename(filepath.Join(f.root.Path, f.paths[item.ID]), away); err != nil {
+		f.t.Fatal(err)
+	}
+	f.reconcile()
+	f.sweepAt(11 * time.Minute)
+	if !f.trashed(item) {
+		f.t.Fatal("setup: not auto-trashed")
+	}
+	f.drainEvents()
+	return away
+}
+
+func (f *missingFixture) putBack(away, rel string) {
+	f.t.Helper()
+	path := filepath.Join(f.root.Path, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.Rename(away, path); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func (f *missingFixture) assertRestored(item store.Item, rel string, fileID int64) {
+	f.t.Helper()
+	if f.trashed(item) {
+		f.t.Fatal("still in Trash after its file came back")
+	}
+	got := f.file(item)
+	if got.ID != fileID || got.RelPath != rel || got.Status != "online" {
+		f.t.Fatalf("file = %+v, want id %d online at %s", got, fileID, rel)
+	}
+	if p, err := f.st.GetProgress(f.ctx, item.ID); err != nil || p == nil || p.PositionS != 600 {
+		f.t.Fatalf("progress after restore = %+v %v", p, err)
+	}
+	added := false
+	for _, ev := range f.drainEvents() {
+		if s, ok := ev.Payload.(store.ItemSummary); ok && ev.Type == events.ItemAdded && s.ID == item.ID {
+			added = true
+		}
+	}
+	if !added {
+		f.t.Fatal("no item.added for the restore")
+	}
+	if !strings.Contains(f.logs.String(), "restored from trash: file is back") {
+		f.t.Fatalf("restore not logged: %s", f.logs.String())
+	}
+}
+
+func TestAutoTrashedItemRestoresWhenItsFileReturns(t *testing.T) {
+	t.Run("same path, reconcile", func(t *testing.T) {
+		f := newMissingFixture(t, 10)
+		item := f.items[0]
+		f.watching(item)
+		before := f.file(item)
+		f.putBack(f.autoTrash(item), before.RelPath)
+		f.reconcile()
+		f.assertRestored(item, before.RelPath, before.ID)
+	})
+	t.Run("same path, probe", func(t *testing.T) {
+		f := newMissingFixture(t, 10)
+		item := f.items[0]
+		f.watching(item)
+		before := f.file(item)
+		f.putBack(f.autoTrash(item), before.RelPath)
+		if err := f.mgr.handleProbe(f.ctx, f.root.ID, before.RelPath); err != nil {
+			t.Fatal(err)
+		}
+		f.assertRestored(item, before.RelPath, before.ID)
+	})
+	t.Run("renamed, fingerprint", func(t *testing.T) {
+		f := newMissingFixture(t, 10)
+		item := f.items[0]
+		f.watching(item)
+		before := f.file(item)
+		f.putBack(f.autoTrash(item), "back/Movie 00 (2026).mkv")
+		f.reconcile()
+		f.assertRestored(item, "back/Movie 00 (2026).mkv", before.ID)
+	})
+	t.Run("episode refreshes its show", func(t *testing.T) {
+		f := newMissingFixture(t, 10)
+		show, err := f.st.CreateShow(f.ctx, store.NewShow{Title: "MobLand"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		episode := "episode"
+		ep := f.add("incoming/MobLand S01E01.mkv")
+		if _, err := f.st.UpdateItem(f.ctx, ep.ID, store.UpdateItemParams{
+			Type: &episode, ShowID: store.SetTo(show.ID), Season: store.SetTo(1), Episode: store.SetTo(1),
+			ClassifiedAt: store.SetTo(store.FormatTime(time.Now())),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		f.putBack(f.autoTrash(ep), "incoming/MobLand S01E01.mkv")
+		f.reconcile()
+		if f.trashed(ep) {
+			t.Fatal("episode still in Trash")
+		}
+		updated := false
+		for _, ev := range f.drainEvents() {
+			if m, ok := ev.Payload.(map[string]any); ok && ev.Type == events.ShowUpdated && m["id"] == show.ID {
+				updated = true
+			}
+		}
+		if !updated {
+			t.Fatal("no show.updated for the restored episode")
+		}
+	})
+}
+
+func TestOwnerTrashedItemNeverAutoRestores(t *testing.T) {
+	// ownerTrash moves item's file into .trash the way DELETE /api/items does.
+	ownerTrash := func(f *missingFixture, item store.Item) (file store.File, live, trashCopy string) {
+		t.Helper()
+		file = f.file(item)
+		live = filepath.Join(f.root.Path, file.RelPath)
+		trashCopy = filepath.Join(f.root.Path, ".trash", fmt.Sprintf("%d_%s", file.ID, filepath.Base(live)))
+		if err := os.MkdirAll(filepath.Dir(trashCopy), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(live, trashCopy); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.MarkItemTrashed(f.ctx, item.ID); err != nil {
+			t.Fatal(err)
+		}
+		return file, live, trashCopy
+	}
+	copyTo := func(t *testing.T, from string, to ...string) {
+		body, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range to {
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	t.Run("same bytes back at the old path and renamed", func(t *testing.T) {
+		f := newMissingFixture(t, 10)
+		item := f.items[0]
+		file, live, trashCopy := ownerTrash(f, item)
+		copyTo(t, trashCopy, live, filepath.Join(f.root.Path, "copy/again.mkv"))
+		f.reconcile()
+		if err := f.mgr.handleProbe(f.ctx, f.root.ID, file.RelPath); err != nil {
+			t.Fatal(err)
+		}
+		if !f.trashed(item) {
+			t.Fatal("an item the owner trashed restored itself")
+		}
+		got := f.file(item)
+		if got.Status != "trashed" || got.RelPath != file.RelPath {
+			t.Fatalf("owner-trashed file = %+v, want still trashed at its old path", got)
+		}
+		if _, err := os.Stat(trashCopy); err != nil {
+			t.Fatalf("trash copy disturbed: %v", err)
+		}
+	})
+	t.Run("status lost to an unmount before B16", func(t *testing.T) {
+		// Unmounts used to overwrite 'trashed', and a remount then marked the
+		// file missing; such a row re-pairs by fingerprint like any other.
+		f := newMissingFixture(t, 10)
+		item := f.items[0]
+		file, _, trashCopy := ownerTrash(f, item)
+		f.exec(`UPDATE media_files SET status = 'missing' WHERE id = ?`, file.ID)
+		copyTo(t, trashCopy, filepath.Join(f.root.Path, "copy/again.mkv"))
+		f.reconcile()
+		if got := f.file(item); got.RelPath != "copy/again.mkv" || got.Status != "online" {
+			t.Fatalf("setup: file = %+v, want re-paired online", got)
+		}
+		if !f.trashed(item) {
+			t.Fatal("an item the owner trashed restored itself")
+		}
+	})
 }

@@ -589,3 +589,75 @@ func TestRemovalCheckBlockedByPermissionsIsNotAMissingFile(t *testing.T) {
 	default:
 	}
 }
+
+func TestWatcherRestoresAutoTrashedItemWhenItsFileReturns(t *testing.T) {
+	st, closeDB := newWatcherStore(t)
+	defer closeDB()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rootPath := t.TempDir()
+	root, err := st.UpsertRoot(ctx, "A", rootPath)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	away := filepath.Join(t.TempDir(), "movie.mp4")
+	if err := os.WriteFile(away, []byte("same media bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := library.Fingerprint(away)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, file, err := st.CreateItemWithFile(ctx, store.NewItem{Title: "Movie"}, store.NewFile{
+		RootID: root.ID, RelPath: "old.mp4", Size: int64(len("same media bytes")), Mtime: time.Now(), Fingerprint: fp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetFileStatus(ctx, file.ID, "missing"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.TrashMissingItem(ctx, item.ID, time.Now().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("auto-trash: %v %v", ok, err)
+	}
+
+	bus := events.NewBus()
+	eventsCh, stopEvents := bus.Subscribe()
+	defer stopEvents()
+	jobs := newFakeJobs()
+	streams := newFakeStreams()
+	manager := NewManager(Options{
+		Store:            st,
+		Jobs:             jobs,
+		Bus:              bus,
+		Log:              slog.Default(),
+		Debounce:         5 * time.Millisecond,
+		QuiesceInterval:  5 * time.Millisecond,
+		QuiesceStableFor: 15 * time.Millisecond,
+		StormBackstop:    time.Hour,
+		StreamFactory:    streams.factory,
+	})
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	jobs.waitReconcile(t, root.ID)
+	newPath := filepath.Join(rootPath, "renamed.mp4")
+	if err := os.Rename(away, newPath); err != nil {
+		t.Fatal(err)
+	}
+	streams.send(t, rootPath, streamEvent{Path: newPath})
+
+	ev := waitEvent(t, eventsCh, events.ItemAdded)
+	if s := ev.Payload.(store.ItemSummary); s.ID != item.ID {
+		t.Fatalf("item.added for %d, want %d", s.ID, item.ID)
+	}
+	got, err := st.GetItem(ctx, item.ID)
+	if err != nil || got.DeletedAt != nil {
+		t.Fatalf("item = %+v %v, want restored", got, err)
+	}
+	moved, err := st.GetFile(ctx, file.ID)
+	if err != nil || moved.RelPath != "renamed.mp4" || moved.Status != "online" {
+		t.Fatalf("file = %+v %v, want online at renamed.mp4", moved, err)
+	}
+}

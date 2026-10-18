@@ -17,9 +17,10 @@ const (
 	// missingGrace is how long a file stays missing before its item moves to
 	// Trash, so a rename or move can re-pair it by fingerprint first.
 	missingGrace = 10 * time.Minute
-	// massVanishPercent: past this share of a root's files missing at once
-	// the volume is suspect (TCC revocation, an exFAT hiccup), not the owner.
-	massVanishPercent = 20
+	// Past both of these at once the volume is suspect (TCC revocation, an
+	// exFAT hiccup), not the owner; the count lets a small root still sync.
+	massVanishPercent  = 20
+	massVanishMinFiles = 10
 )
 
 // handleTrashMissing is ruling B16: an item whose files are all missing from
@@ -88,6 +89,34 @@ func (m *Manager) handleTrashMissing(ctx context.Context) error {
 	return err
 }
 
+// publishFileBack publishes an item whose file just came online, first
+// restoring it if the sweep trashed it for being missing (ruling B19).
+func (m *Manager) publishFileBack(ctx context.Context, itemID int64) error {
+	restored, err := m.store.RestoreReturnedItem(ctx, itemID)
+	if err != nil {
+		return err
+	}
+	if !restored {
+		m.publishItemSummary(ctx, itemID)
+		return nil
+	}
+	summary, err := m.store.GetItemSummary(ctx, itemID)
+	if err != nil {
+		m.log.Error("hydrate item event", "item_id", itemID, "error", err)
+		return nil
+	}
+	m.publish(events.Event{Type: events.ItemAdded, Payload: summary})
+	m.announceRestored(summary)
+	return nil
+}
+
+func (m *Manager) announceRestored(item store.ItemSummary) {
+	m.log.Info("restored from trash: file is back", "item_id", item.ID, "title", item.Title)
+	if item.Show != nil {
+		m.publish(events.Event{Type: events.ShowUpdated, Payload: map[string]any{"id": item.Show.ID}})
+	}
+}
+
 // rootsSafeToTrashFrom returns the roots whose missing files can be believed:
 // online, listable right now, and not missing so many files that the volume
 // itself is the likelier cause.
@@ -103,10 +132,10 @@ func (m *Manager) rootsSafeToTrashFrom(roots []store.Root, counts map[int64]stor
 				"root_id", root.ID, "name", root.Name, "path", root.Path, "error", err)
 			continue
 		}
-		if c.Missing*100 > c.Live*massVanishPercent {
+		if c.Missing > massVanishMinFiles && c.Missing*100 > c.Live*massVanishPercent {
 			m.log.Warn("not trashing missing files: too many missing on library root",
-				"root_id", root.ID, "name", root.Name, "path", root.Path,
-				"missing", c.Missing, "files", c.Live, "limit_percent", massVanishPercent)
+				"root_id", root.ID, "name", root.Name, "path", root.Path, "missing", c.Missing, "files", c.Live,
+				"limit_percent", massVanishPercent, "limit_files", massVanishMinFiles)
 			continue
 		}
 		safe[root.ID] = root

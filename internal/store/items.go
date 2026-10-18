@@ -381,7 +381,7 @@ func (s *Store) MarkItemRestored(ctx context.Context, id int64) error {
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx, `
-		UPDATE media_items SET deleted_at = NULL, updated_at = datetime('now')
+		UPDATE media_items SET deleted_at = NULL, auto_trashed = 0, updated_at = datetime('now')
 		WHERE id = ? AND deleted_at IS NOT NULL`, id)
 	if err != nil {
 		return err

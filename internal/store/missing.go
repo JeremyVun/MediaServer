@@ -76,7 +76,8 @@ func (s *Store) ListItemsMissingSince(ctx context.Context, cutoff time.Time) ([]
 // .trash. Reports whether the item was trashed.
 func (s *Store) TrashMissingItem(ctx context.Context, id int64, cutoff time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE media_items AS mi SET deleted_at = datetime('now'), updated_at = datetime('now')
+		UPDATE media_items AS mi
+		SET deleted_at = datetime('now'), updated_at = datetime('now'), auto_trashed = 1
 		WHERE mi.id = ? AND mi.deleted_at IS NULL AND `+missingSinceCutoff,
 		id, FormatTime(cutoff))
 	if err != nil {
@@ -84,6 +85,34 @@ func (s *Store) TrashMissingItem(ctx context.Context, id int64, cutoff time.Time
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// RestoreReturnedItem takes an item out of Trash once one of its files is
+// online again, but only if TrashMissingItem put it there: an item the owner
+// trashed stays in Trash. Files still missing get a fresh grace, as on any
+// restore. Reports whether the item was restored.
+func (s *Store) RestoreReturnedItem(ctx context.Context, id int64) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE media_items SET deleted_at = NULL, auto_trashed = 0, updated_at = datetime('now')
+		WHERE id = ? AND deleted_at IS NOT NULL AND auto_trashed = 1
+		  AND EXISTS (SELECT 1 FROM media_files WHERE item_id = media_items.id AND status = 'online')`, id)
+	if err != nil {
+		return false, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE media_files SET missing_since = datetime('now')
+		WHERE item_id = ? AND status = 'missing'`, id); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // NextMissingSince returns the earliest missing_since after the given time

@@ -129,3 +129,79 @@ func TestTrashMissingItemRechecksItsFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoreReturnedItemOnlyUndoesAutoTrash(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	root, _ := s.UpsertRoot(ctx, "A", "/Volumes/A")
+	add := func(name string) (store.Item, store.File) {
+		t.Helper()
+		item, f, err := s.CreateItemWithFile(ctx, store.NewItem{Title: name}, store.NewFile{
+			RootID: root.ID, RelPath: name + ".mkv", Size: 1, Mtime: time.Now(), Fingerprint: name,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return item, f
+	}
+	trashedNow := func(id int64) bool {
+		t.Helper()
+		got, err := s.GetItem(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.DeletedAt != nil
+	}
+
+	auto, af := add("auto")
+	if err := s.SetFileStatus(ctx, af.ID, "missing"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.TrashMissingItem(ctx, auto.ID, time.Now().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("auto-trash: %v %v", ok, err)
+	}
+	if ok, err := s.RestoreReturnedItem(ctx, auto.ID); err != nil || ok {
+		t.Fatalf("restored with its file still missing: %v %v", ok, err)
+	}
+	if err := s.SetFileStatus(ctx, af.ID, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.RestoreReturnedItem(ctx, auto.ID); err != nil || !ok || trashedNow(auto.ID) {
+		t.Fatalf("auto-trashed item with its file back: restored=%v err=%v", ok, err)
+	}
+
+	owner, of := add("owner")
+	if err := s.MarkItemTrashed(ctx, owner.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetFileStatus(ctx, of.ID, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.RestoreReturnedItem(ctx, owner.ID); err != nil || ok || !trashedNow(owner.ID) {
+		t.Fatalf("owner-trashed item restored itself: %v %v", ok, err)
+	}
+
+	// Restored by hand, then trashed by the owner: no longer auto-trashed.
+	again, gf := add("again")
+	if err := s.SetFileStatus(ctx, gf.ID, "missing"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.TrashMissingItem(ctx, again.ID, time.Now().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("auto-trash: %v %v", ok, err)
+	}
+	if err := s.MarkItemRestored(ctx, again.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetFileStatus(ctx, gf.ID, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkItemTrashed(ctx, again.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetFileStatus(ctx, gf.ID, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.RestoreReturnedItem(ctx, again.ID); err != nil || ok {
+		t.Fatalf("owner trash after a manual restore still auto-restores: %v %v", ok, err)
+	}
+}

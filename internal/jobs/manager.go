@@ -530,6 +530,9 @@ func (m *Manager) handleReconcile(ctx context.Context, rootID int64) error {
 		seen[rel] = true
 
 		existing, err := m.store.GetFileByLocation(ctx, root.ID, rel)
+		if err == nil && existing.Status == "trashed" {
+			return nil // bytes in .trash; the path stays the trashed item's until restore or purge
+		}
 		if err == nil {
 			if existing.Status != "online" {
 				if err := m.store.SetFileStatus(ctx, existing.ID, "online"); err != nil {
@@ -539,7 +542,9 @@ func (m *Manager) handleReconcile(ctx context.Context, rootID int64) error {
 					"file_id": existing.ID,
 					"status":  "online",
 				}})
-				m.publishItemSummary(ctx, existing.ItemID)
+				if err := m.publishFileBack(ctx, existing.ItemID); err != nil {
+					return err
+				}
 			}
 			// Unchanged and already probed: a remount only needs the status
 			// flip above, not a re-probe of the whole library.
@@ -643,10 +648,15 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 	if err != nil && !newFile {
 		return err
 	}
+	if !newFile && existing.Status == "trashed" {
+		m.log.Info("not indexing: path belongs to an item in trash", "root_id", root.ID, "rel_path", relPath)
+		return nil
+	}
 
 	var item store.Item
 	var file store.File
 	unchanged := false
+	restored := false
 	if newFile {
 		item, file, err = m.store.CreateItemWithFile(ctx, classify.Guess(relPath, probed.DurationS), store.NewFile{
 			RootID:      root.ID,
@@ -671,6 +681,9 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 		}
 		if file.Status != "online" {
 			if err := m.store.SetFileStatus(ctx, file.ID, "online"); err != nil {
+				return err
+			}
+			if restored, err = m.store.RestoreReturnedItem(ctx, item.ID); err != nil {
 				return err
 			}
 		}
@@ -731,7 +744,7 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 	}
 
 	eventType := events.ItemUpdated
-	if newFile {
+	if newFile || restored {
 		eventType = events.ItemAdded
 	}
 	// Publish the full summary (SPEC-API sends whole item objects over SSE);
@@ -742,6 +755,9 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 		return nil
 	}
 	m.publish(events.Event{Type: eventType, Payload: summary})
+	if restored {
+		m.announceRestored(summary)
+	}
 	m.publishUploadHandoff(ctx, root.ID, relPath, item.ID)
 	return nil
 }
@@ -920,7 +936,9 @@ func (m *Manager) moveByFingerprint(ctx context.Context, targetRoot store.Root, 
 			"file_id": file.ID,
 			"status":  "online",
 		}})
-		m.publishItemSummary(ctx, file.ItemID)
+		if err := m.publishFileBack(ctx, file.ItemID); err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	return false, nil

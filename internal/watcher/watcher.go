@@ -404,6 +404,29 @@ func (m *Manager) publishItemUpdated(ctx context.Context, itemID int64) {
 	m.bus.Publish(events.Event{Type: events.ItemUpdated, Payload: summary})
 }
 
+// publishFileBack publishes an item whose file was just re-paired, first
+// restoring it if the missing-file sweep had trashed it (ruling B19).
+func (m *Manager) publishFileBack(ctx context.Context, itemID int64) {
+	restored, err := m.store.RestoreReturnedItem(ctx, itemID)
+	if err != nil {
+		m.log.Error("restore returned item", "item_id", itemID, "error", err)
+	}
+	if !restored {
+		m.publishItemUpdated(ctx, itemID)
+		return
+	}
+	summary, err := m.store.GetItemSummary(ctx, itemID)
+	if err != nil {
+		m.log.Error("hydrate watcher item event", "item_id", itemID, "error", err)
+		return
+	}
+	m.log.Info("restored from trash: file is back", "item_id", itemID, "title", summary.Title)
+	m.publish(events.Event{Type: events.ItemAdded, Payload: summary})
+	if summary.Show != nil {
+		m.publish(events.Event{Type: events.ShowUpdated, Payload: map[string]any{"id": summary.Show.ID}})
+	}
+}
+
 type rootWatcher struct {
 	manager *Manager
 	root    store.Root
@@ -591,7 +614,7 @@ func (rw *rootWatcher) tryMove(ctx context.Context, rel string, info os.FileInfo
 			rw.manager.log.Warn("move file row", "file_id", file.ID, "rel_path", rel, "error", err)
 			return false
 		}
-		rw.manager.publishItemUpdated(ctx, file.ItemID)
+		rw.manager.publishFileBack(ctx, file.ItemID)
 		return true
 	}
 	return false
