@@ -13,6 +13,8 @@ import {
   useToast,
 } from '../../ui/index.ts'
 import { useTheme, type ThemePreference } from '../../theme/ThemeProvider.tsx'
+import { SeasonChips } from '../show/SeasonChips.tsx'
+import type { SeasonOption } from '../show/seasons.ts'
 
 /**
  * Storybook-less demo route (/demo): every ui/ primitive rendered in both
@@ -56,7 +58,7 @@ function ThemePanel({ theme }: { theme: 'dark' | 'light' }) {
   return (
     <section
       data-theme={theme}
-      className="bg-canvas text-primary border-line rounded-lg border p-6"
+      className="bg-canvas text-primary border-line min-w-0 rounded-lg border p-6"
     >
       <h2 className="text-lg mb-6 font-semibold tracking-tight capitalize">{theme}</h2>
       <div className="flex flex-col gap-8">
@@ -66,8 +68,34 @@ function ThemePanel({ theme }: { theme: 'dark' | 'light' }) {
         <MenusDemo />
         <SkeletonsDemo />
         <DialogAndToastDemo />
+        <SeasonChipsDemo />
       </div>
     </section>
+  )
+}
+
+const MANY_SEASONS: SeasonOption[] = [
+  ...Array.from({ length: 22 }, (_, i) => ({ season: i + 1, missing: i >= 3 && i !== 20 })),
+  { season: 0, missing: true },
+]
+const FEW_SEASONS: SeasonOption[] = [
+  { season: 1, missing: false },
+  { season: 2, missing: true },
+  { season: 3, missing: false },
+]
+
+function SeasonChipsDemo() {
+  const [many, setMany] = useState(21)
+  const [few, setFew] = useState(1)
+  return (
+    <DemoBlock label="Season chips">
+      <div data-demo="season-chips-22" className="-mx-3">
+        <SeasonChips seasons={MANY_SEASONS} selected={many} onSelect={setMany} />
+      </div>
+      <div className="bg-raised mt-3 rounded-md py-1">
+        <SeasonChips seasons={FEW_SEASONS} selected={few} onSelect={setFew} surface="raised" />
+      </div>
+    </DemoBlock>
   )
 }
 

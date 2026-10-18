@@ -1,0 +1,41 @@
+import type { LibraryType } from '../../lib/searchParams.ts'
+
+const TABS: { value: LibraryType; label: string }[] = [
+  { value: '', label: 'All' },
+  { value: 'show', label: 'Shows' },
+  { value: 'movie', label: 'Movies' },
+]
+
+/** All · Shows · Movies, in place of the old item-count line. Negative
+    margins give each tab a 44 px target without growing the row. */
+export function LibraryTypeTabs({
+  value,
+  onChange,
+}: {
+  value: LibraryType
+  onChange: (next: LibraryType) => void
+}) {
+  return (
+    <div role="tablist" aria-label="Show" className="flex items-center gap-6">
+      {TABS.map((tab) => {
+        const on = tab.value === value
+        return (
+          <button
+            key={tab.label}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            onClick={() => onChange(tab.value)}
+            className={[
+              'relative -mx-3 -my-3 inline-flex h-11 min-w-11 cursor-pointer items-center justify-center px-3',
+              on ? 'text-primary font-medium' : 'text-secondary hover:text-primary',
+            ].join(' ')}
+          >
+            {tab.label}
+            {on && <span aria-hidden className="bg-primary absolute inset-x-3 bottom-1.5 h-0.5 rounded-full" />}
+          </button>
+        )
+      })}
+    </div>
+  )
+}

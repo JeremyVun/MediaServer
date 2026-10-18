@@ -1,8 +1,16 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, jsonApi } from './client.ts'
+import type { LibraryType } from '../lib/searchParams.ts'
 import type {
   Collection,
+  CollectionEntryRef,
   Health,
+  LibraryList,
+  MatchSearchResponse,
+  ShowDetail,
+  ShowMatchRequest,
+  ShowPatch,
+  ShowTrashResponse,
   RootInfo,
   FsDirs,
   ItemDetail,
@@ -34,6 +42,16 @@ export interface LibraryFilters {
   trashed?: boolean
 }
 
+/** The library grid (`/api/library`): shows plus items outside any show. */
+export interface LibraryEntryFilters {
+  q: string
+  sort?: 'added' | 'title' | 'year'
+  order?: 'asc' | 'desc'
+  type?: LibraryType
+  collection_id?: number
+  uncollected?: boolean
+}
+
 export function useHealth() {
   return useQuery({
     queryKey: ['health'],
@@ -52,6 +70,15 @@ export function useSettings() {
 
 // Moving the cache stops in-flight transcodes, so health (active sessions,
 // queue depth) is stale the moment this succeeds.
+export function useSetSemanticClassification() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      jsonApi<SettingsResponse>('/api/settings/semantic-classification', 'PUT', { enabled }),
+    onSuccess: (settings) => queryClient.setQueryData(['settings'], settings),
+  })
+}
+
 export function useSetHLSCacheDir() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -165,6 +192,59 @@ export function useReorderCollection() {
   })
 }
 
+export function useAddShowToCollection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ collectionID, showID }: { collectionID: number; showID: number }) =>
+      jsonApi<void>(`/api/collections/${collectionID}/items`, 'POST', { show_id: showID }),
+    onSuccess: () => invalidateCollectionCaches(queryClient),
+  })
+}
+
+/** Removes the show row and its episodes' rows from the collection. */
+export function useRemoveShowFromCollection() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ collectionID, showID }: { collectionID: number; showID: number }) =>
+      api<void>(`/api/collections/${collectionID}/shows/${showID}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateCollectionCaches(queryClient),
+  })
+}
+
+/** Grid-order reorder; required once a collection holds a show row. */
+export function useReorderCollectionEntries() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ collectionID, entries }: { collectionID: number; entries: CollectionEntryRef[] }) =>
+      jsonApi<void>(`/api/collections/${collectionID}/order`, 'PUT', { entries }),
+    onSuccess: () => invalidateCollectionCaches(queryClient),
+  })
+}
+
+export function useLibraryEntries(filters: LibraryEntryFilters) {
+  const q = filters.q.trim()
+  return useInfiniteQuery({
+    queryKey: ['library', { ...filters, q }],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams()
+      if (q) params.set('q', q)
+      if (filters.sort) params.set('sort', filters.sort)
+      if (filters.order) params.set('order', filters.order)
+      if (filters.type) params.set('type', filters.type)
+      if (filters.collection_id) params.set('collection_id', String(filters.collection_id))
+      else if (filters.uncollected) params.set('uncollected', '1')
+      params.set('offset', String(pageParam))
+      params.set('limit', String(PAGE_SIZE))
+      return api<LibraryList>(`/api/library?${params}`)
+    },
+    getNextPageParam: (lastPage, pages) => {
+      const loaded = pages.reduce((sum, page) => sum + page.entries.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
+  })
+}
+
 export function useLibraryItems(filters: LibraryFilters) {
   const normalizedQ = filters.q.trim()
   return useInfiniteQuery({
@@ -201,12 +281,83 @@ export function useLibraryItems(filters: LibraryFilters) {
 
 // "Continue watching" rail: server-side filter so it sees the whole catalog,
 // not just the library pages fetched so far. Over-fetches past the display cap
-// so the client can drop offline items and still fill the row.
+// so the client can drop offline entries and still fill the row. Shows come
+// back at their up-next episode.
 export function useContinueWatching(enabled: boolean) {
   return useQuery({
     queryKey: ['continue-watching'],
-    queryFn: () => api<ItemList>('/api/items?in_progress=1&sort=watched&limit=24'),
+    queryFn: () => api<LibraryList>('/api/library?in_progress=1&sort=watched&limit=24'),
     enabled,
+  })
+}
+
+export function useShow(id: number | null) {
+  return useQuery({
+    queryKey: ['show', id],
+    queryFn: () => api<ShowDetail>(`/api/shows/${id}`),
+    enabled: id != null,
+  })
+}
+
+/** Rename (`title`) or "Looks right" (`confirmed: true`). */
+export function usePatchShow(id: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (patch: ShowPatch) => jsonApi<ShowDetail>(`/api/shows/${id}`, 'PATCH', patch),
+    onSuccess: (show) => {
+      queryClient.setQueryData(['show', id], show)
+      invalidateShowCaches(queryClient)
+    },
+  })
+}
+
+/** `tvmaze_id: null` is "Not on TVmaze". A match another show already holds
+    fails with ApiError code `match_taken` and `body.show_id`: offer a merge. */
+export function useMatchShow(id: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (request: ShowMatchRequest) =>
+      jsonApi<ShowDetail>(`/api/shows/${id}/match`, 'POST', request),
+    onSuccess: (show) => {
+      queryClient.setQueryData(['show', id], show)
+      invalidateShowCaches(queryClient)
+    },
+  })
+}
+
+/** Moves every episode into `intoShowID` and deletes this show; resolves to
+    the surviving show's detail. */
+export function useMergeShow(id: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (intoShowID: number) =>
+      jsonApi<ShowDetail>(`/api/shows/${id}/merge`, 'POST', { into_show_id: intoShowID }),
+    onSuccess: (show) => {
+      queryClient.removeQueries({ queryKey: ['show', id] })
+      queryClient.setQueryData(['show', show.id], show)
+      invalidateShowCaches(queryClient)
+      invalidateItemCaches(queryClient)
+    },
+  })
+}
+
+/** Trashes every live episode; undo restores each returned item id. */
+export function useTrashShow() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api<ShowTrashResponse>(`/api/shows/${id}/trash`, { method: 'POST' }),
+    onSuccess: () => invalidateItemCaches(queryClient),
+  })
+}
+
+export function useShowMatchSearch(q: string, enabled = true) {
+  const trimmed = q.trim()
+  return useQuery({
+    queryKey: ['show-match-search', trimmed],
+    queryFn: () =>
+      api<MatchSearchResponse>(`/api/shows/match-search?${new URLSearchParams({ q: trimmed })}`),
+    enabled: enabled && trimmed.length > 0,
+    staleTime: 60_000,
   })
 }
 
@@ -225,6 +376,7 @@ export function usePatchItem(id: number) {
     onSuccess: (item) => {
       queryClient.setQueryData(['item', id], item)
       void queryClient.invalidateQueries({ queryKey: ['items'] })
+      invalidateShowCaches(queryClient)
     },
   })
 }
@@ -362,9 +514,16 @@ function invalidateCollectionCaches(queryClient: ReturnType<typeof useQueryClien
   invalidateItemCaches(queryClient)
 }
 
+function invalidateShowCaches(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ['library'] })
+  void queryClient.invalidateQueries({ queryKey: ['continue-watching'] })
+  void queryClient.invalidateQueries({ queryKey: ['show'] })
+}
+
 function invalidateItemCaches(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ['items'] })
   void queryClient.invalidateQueries({ queryKey: ['item'] })
   void queryClient.invalidateQueries({ queryKey: ['search'] })
   void queryClient.invalidateQueries({ queryKey: ['collections'] })
+  invalidateShowCaches(queryClient)
 }

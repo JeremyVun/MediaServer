@@ -11,6 +11,7 @@ type MockState = {
 }
 
 test('grid to player saves progress and resumes after reload', async ({ page }) => {
+  await useCompactCards(page)
   await installMediaShim(page)
   const state = await mockMediaServer(page)
 
@@ -53,12 +54,13 @@ test('player back arrow returns to library home when entered from a poster', asy
   await page.getByRole('link', { name: /Play Big Buck Bunny/ }).click()
 
   await expect(page).toHaveURL(/\/watch\/1$/)
-  await page.locator('[data-player-controls] a').first().click()
+  await page.locator('[data-player-controls]').first().getByRole('button').first().click()
   await expect(page).toHaveURL('/')
   await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
 })
 
 test('player back arrow returns to item detail when entered from there', async ({ page }) => {
+  await useCompactCards(page)
   await installMediaShim(page)
   await mockMediaServer(page)
 
@@ -70,10 +72,15 @@ test('player back arrow returns to item detail when entered from there', async (
   await page.getByRole('button', { name: 'Play' }).click()
 
   await expect(page).toHaveURL(/\/watch\/1\?file_id=10&t=0$/)
-  await page.locator('[data-player-controls] a').first().click()
+  await page.locator('[data-player-controls]').first().getByRole('button').first().click()
   await expect(page).toHaveURL('/items/1')
   await expect(page.getByRole('heading', { name: 'Big Buck Bunny' })).toBeVisible()
 })
+
+// Compact cards carry the title strip that links to the item page.
+async function useCompactCards(page: Page) {
+  await page.addInitScript(() => localStorage.setItem('card-style', 'compact'))
+}
 
 async function installMediaShim(page: Page) {
   await page.addInitScript(() => {
@@ -252,18 +259,12 @@ async function mockMediaServer(page: Page): Promise<MockState> {
       return
     }
 
-    if (request.method() === 'GET' && path === '/api/items') {
+    if (request.method() === 'GET' && path === '/api/library') {
+      const resuming = state.progress != null && state.progress.position_s > 0 && !state.progress.completed
+      const entries = url.searchParams.get('in_progress') === '1' && !resuming ? [] : [summary(state.progress)]
       await json(route, {
-        total: 1,
-        items: [summary(state.progress)],
-      })
-      return
-    }
-
-    if (request.method() === 'GET' && path === '/api/search') {
-      await json(route, {
-        total: 1,
-        items: [summary(state.progress)],
+        total: entries.length,
+        entries: entries.map((item) => ({ kind: 'item', ...item })),
       })
       return
     }
@@ -285,6 +286,10 @@ async function mockMediaServer(page: Page): Promise<MockState> {
         reason: null,
         url: '/api/files/10/stream',
         subtitles: [],
+        quality: 'original',
+        qualities: [],
+        audio_only: false,
+        markers: {},
       })
       return
     }
@@ -326,6 +331,11 @@ function summary(progress: ProgressState | null) {
     available: true,
     progress: progress ?? undefined,
     collection_ids: [],
+    show: null,
+    season: null,
+    episode: null,
+    episode_end: null,
+    needs_check: false,
   }
 }
 

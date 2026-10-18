@@ -14,16 +14,22 @@ describe('parseLibraryParams', () => {
       sort: 'added',
       collectionID: undefined,
       uncollected: false,
+      type: '',
     })
   })
 
-  it('reads q, sort, collection', () => {
-    expect(parseLibraryParams(new URLSearchParams('q=matrix&sort=title&collection=7'))).toEqual({
+  it('reads q, sort, collection, type', () => {
+    expect(parseLibraryParams(new URLSearchParams('q=matrix&sort=title&collection=7&type=show'))).toEqual({
       q: 'matrix',
       sort: 'title',
       collectionID: 7,
       uncollected: false,
+      type: 'show',
     })
+  })
+
+  it('falls back to All on an unknown type', () => {
+    expect(parseLibraryParams(new URLSearchParams('type=episode')).type).toBe('')
   })
 
   it('falls back to default sort on an invalid value', () => {
@@ -44,31 +50,34 @@ describe('parseLibraryParams', () => {
 describe('libraryParamUpdates', () => {
   it('omits defaults so the URL stays clean', () => {
     expect(
-      libraryParamUpdates({ q: '', sort: 'added', collectionID: undefined, uncollected: false }),
+      libraryParamUpdates({ q: '', sort: 'added', collectionID: undefined, uncollected: false, type: '' }),
     ).toEqual({
       q: undefined,
       sort: undefined,
       collection: undefined,
+      type: undefined,
     })
   })
 
   it('includes non-default values', () => {
     expect(
-      libraryParamUpdates({ q: 'matrix', sort: 'year', collectionID: 3, uncollected: false }),
+      libraryParamUpdates({ q: 'matrix', sort: 'year', collectionID: 3, uncollected: false, type: 'movie' }),
     ).toEqual({
       q: 'matrix',
       sort: 'year',
       collection: '3',
+      type: 'movie',
     })
   })
 
   it('encodes the uncollected filter as the sentinel, ignoring any collectionID', () => {
     expect(
-      libraryParamUpdates({ q: '', sort: 'added', collectionID: 3, uncollected: true }),
+      libraryParamUpdates({ q: '', sort: 'added', collectionID: 3, uncollected: true, type: '' }),
     ).toEqual({
       q: undefined,
       sort: undefined,
       collection: 'none',
+      type: undefined,
     })
   })
 })

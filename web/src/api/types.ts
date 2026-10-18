@@ -23,8 +23,14 @@ export interface HLSCacheSettings {
   available: boolean
 }
 
+export interface SemanticClassificationSettings {
+  enabled: boolean
+  available: boolean
+}
+
 export interface SettingsResponse {
   hls_cache: HLSCacheSettings
+  semantic_classification: SemanticClassificationSettings
 }
 
 export interface RootInfo {
@@ -52,9 +58,25 @@ export interface Progress {
   completed: boolean
 }
 
-export interface ItemSummary {
+export type ItemType = 'video' | 'movie' | 'episode'
+
+export interface ShowRef {
   id: number
-  type: 'video' | 'movie' | 'episode'
+  title: string
+}
+
+/** An item's place in a show; null/false for movies, videos and pending episodes. */
+export interface EpisodeFields {
+  show: ShowRef | null
+  season: number | null
+  episode: number | null
+  episode_end: number | null
+  needs_check: boolean
+}
+
+export interface ItemSummary extends EpisodeFields {
+  id: number
+  type: ItemType
   title: string
   year: number | null
   duration_s: number | null
@@ -69,6 +91,102 @@ export interface ItemList {
   total: number
   items: ItemSummary[]
 }
+
+export interface UpNext {
+  item_id: number
+  season: number
+  episode: number
+  episode_end: number | null
+  title: string
+  available: boolean
+  thumb_url: string
+  progress?: Progress
+  /** Not on the wire yet; the card draws its progress bar only when present. */
+  duration_s?: number | null
+}
+
+export interface ShowSummary {
+  id: number
+  title: string
+  year: number | null
+  /** Poster, else the up-next thumbnail, else null. */
+  thumb_url: string | null
+  poster_url: string | null
+  backdrop_url: string | null
+  network?: string | null
+  created_at: string
+  latest_added_at: string
+  season_count: number
+  episode_count: number
+  available: boolean
+  needs_check: boolean
+  has_progress: boolean
+  collection_ids: number[]
+  /** null = caught up. */
+  up_next: UpNext | null
+}
+
+export type LibraryEntry = ({ kind: 'show' } & ShowSummary) | ({ kind: 'item' } & ItemSummary)
+
+export interface LibraryList {
+  total: number
+  entries: LibraryEntry[]
+}
+
+export interface MissingEpisode {
+  kind: 'missing'
+  season: number
+  number: number
+  title: string
+  /** YYYY-MM-DD; a future date means unaired. */
+  airdate: string | null
+  missing: true
+}
+
+export type ShowEpisodeEntry = ({ kind: 'item' } & ItemSummary) | MissingEpisode
+
+export interface ShowSeason {
+  season: number
+  episodes: ShowEpisodeEntry[]
+}
+
+export interface ShowDetail extends ShowSummary {
+  summary: string | null
+  tvmaze_id: number | null
+  season_offset: number
+  title_locked: boolean
+  /** Ascending, specials (season 0) last. */
+  seasons: ShowSeason[]
+}
+
+export interface ShowPatch {
+  title?: string
+  confirmed?: true
+}
+
+export interface ShowMatchRequest {
+  tvmaze_id: number | null
+  season_offset?: number
+}
+
+export interface MatchCandidate {
+  tvmaze_id: number
+  name: string
+  year: number | null
+  network: string | null
+  poster_url: string | null
+  local_show_id: number | null
+}
+
+export interface MatchSearchResponse {
+  results: MatchCandidate[]
+}
+
+export interface ShowTrashResponse {
+  item_ids: number[]
+}
+
+export type CollectionEntryRef = { item_id: number } | { show_id: number }
 
 export interface Collection {
   id: number
@@ -101,9 +219,9 @@ export interface MediaFile {
   streams: MediaStream[]
 }
 
-export interface ItemDetail {
+export interface ItemDetail extends EpisodeFields {
   id: number
-  type: 'video' | 'movie' | 'episode'
+  type: ItemType
   title: string
   year: number | null
   summary: string | null
@@ -117,10 +235,17 @@ export interface ItemDetail {
 }
 
 export interface ItemPatch {
-  type?: ItemDetail['type']
+  type?: ItemType
   title?: string
   year?: number
   summary?: string
+  /** Only on a real move: it writes an owner alias and locks the item. */
+  show_id?: number
+  season?: number
+  episode?: number
+  /** null clears a range; omit to leave it alone. */
+  episode_end?: number | null
+  confirmed?: true
 }
 
 export interface PlayCapabilities {
@@ -155,6 +280,11 @@ export interface Subtitle {
   url: string
 }
 
+export interface PlayMarkers {
+  intro?: { start_s: number; end_s: number }
+  credits_start_s?: number
+}
+
 export interface PlayResponse {
   mode: 'direct' | 'hls'
   reason:
@@ -171,11 +301,15 @@ export interface PlayResponse {
   quality: Quality
   qualities: QualityRung[]
   audio_only: boolean
+  /** {} when nothing is known. */
+  markers: PlayMarkers
 }
 
 export interface ProgressUpdate {
   position_s: number
   duration_s: number
+  /** Advancing from the Next episode card, or passing credits_start_s. */
+  completed?: true
 }
 
 export interface AddRootRequest {
@@ -252,4 +386,6 @@ export interface ApiErrorBody {
     code: string
     message: string
   }
+  /** match_taken: the local show already holding that TVmaze match. */
+  show_id?: number
 }

@@ -109,10 +109,11 @@ async function mockLiveServer(page: Page): Promise<MockState> {
       return
     }
 
-    if (request.method() === 'GET' && path === '/api/items') {
+    if (request.method() === 'GET' && path === '/api/library') {
+      const entries = url.searchParams.get('in_progress') === '1' ? [] : state.items
       await json(route, {
-        total: state.items.length,
-        items: state.items,
+        total: entries.length,
+        entries: entries.map((item) => ({ kind: 'item', ...item })),
       })
       return
     }
@@ -144,6 +145,11 @@ function summary(id: number, title: string, available: boolean) {
     thumb_url: `/api/items/${id}/thumb`,
     available,
     collection_ids: [],
+    show: null,
+    season: null,
+    episode: null,
+    episode_end: null,
+    needs_check: false,
   }
 }
 

@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router'
 import {
-  Check,
   ChevronDown,
   Clapperboard,
-  HardDrive,
   Layers,
   ListChecks,
   Plus,
@@ -16,25 +14,35 @@ import {
 } from 'lucide-react'
 import {
   useAddItemToCollection,
+  useAddShowToCollection,
   useCollections,
   useContinueWatching,
   useCreateCollection,
   useDeleteItem,
   useHealth,
-  useLibraryItems,
+  useLibraryEntries,
   useRestoreItem,
-  type LibraryFilters,
+  useTrashShow,
+  type LibraryEntryFilters,
 } from '../../api/queries.ts'
 import { useLiveItems } from '../../api/sse.tsx'
 import { useUploads } from '../upload/UploadProvider.tsx'
-import type { Collection, ItemSummary } from '../../api/types.ts'
-import { useCardStyle, type CardStyle } from '../../theme/cardStyle.ts'
-import { formatDuration, isRecentlyCreated, progressPercent } from '../../lib/format.ts'
+import type { Collection, LibraryEntry } from '../../api/types.ts'
+import { useCardStyle } from '../../theme/cardStyle.ts'
+import { isRecentlyCreated } from '../../lib/format.ts'
 import { makeRunOrToast } from '../../lib/mutationFeedback.ts'
-import { libraryParamUpdates, parseLibraryParams, withParamUpdates } from '../../lib/searchParams.ts'
+import {
+  libraryParamUpdates,
+  parseLibraryParams,
+  withParamUpdates,
+  type LibraryType,
+} from '../../lib/searchParams.ts'
+import { ContinueWatchingRow } from './ContinueWatchingRow.tsx'
+import { ItemCard } from './ItemCard.tsx'
+import { LibraryTypeTabs } from './LibraryTypeTabs.tsx'
+import { ShowCard } from './ShowCard.tsx'
 import {
   Button,
-  Card,
   Dialog,
   IconButton,
   Input,
@@ -44,7 +52,7 @@ import {
   useToast,
 } from '../../ui/index.ts'
 
-const SORT_OPTIONS: { value: NonNullable<LibraryFilters['sort']>; label: string }[] = [
+const SORT_OPTIONS: { value: NonNullable<LibraryEntryFilters['sort']>; label: string }[] = [
   { value: 'added', label: 'Recently added' },
   { value: 'title', label: 'Title' },
   { value: 'year', label: 'Year' },
@@ -58,6 +66,7 @@ export function LibraryPage() {
   const sort = urlState.sort
   const collectionID = urlState.collectionID
   const uncollected = urlState.uncollected
+  const type = urlState.type
 
   // 3.3: q/sort/collection live in the URL so the library survives a
   // round-trip and is shareable. `query` is local so typing feels instant;
@@ -89,13 +98,19 @@ export function LibraryPage() {
     }, 150)
   }
 
-  const setSort = (next: LibraryFilters['sort']) =>
+  const setSort = (next: LibraryEntryFilters['sort']) =>
     setSearchParams(
       (prev) =>
         withParamUpdates(
           prev,
-          libraryParamUpdates({ q: urlState.q, sort: next ?? 'added', collectionID, uncollected }),
+          libraryParamUpdates({ q: urlState.q, sort: next ?? 'added', collectionID, uncollected, type }),
         ),
+      { replace: true },
+    )
+  const setType = (next: LibraryType) =>
+    setSearchParams(
+      (prev) =>
+        withParamUpdates(prev, libraryParamUpdates({ q: urlState.q, sort, collectionID, uncollected, type: next })),
       { replace: true },
     )
   // The collection filter is one of three mutually exclusive pills: undefined
@@ -110,6 +125,7 @@ export function LibraryPage() {
             sort,
             collectionID: typeof next === 'number' ? next : undefined,
             uncollected: next === 'none',
+            type,
           }),
         ),
       { replace: true },
@@ -117,7 +133,7 @@ export function LibraryPage() {
   const pillClass = (active: boolean) =>
     [
       'border-line rounded-full border px-3 py-1.5 text-sm',
-      active ? 'bg-accent-fill text-accent-contrast' : 'bg-surface text-primary hover:bg-raised',
+      active ? 'bg-accent-fill text-on-accent' : 'bg-surface text-primary hover:bg-raised',
     ].join(' ')
 
   // The item/watch pages send the user back here via router state — built
@@ -126,35 +142,43 @@ export function LibraryPage() {
   const libraryPath = (() => {
     const qs = withParamUpdates(
       searchParams,
-      libraryParamUpdates({ q: query, sort, collectionID, uncollected }),
+      libraryParamUpdates({ q: query, sort, collectionID, uncollected, type }),
     ).toString()
     return qs ? `/?${qs}` : '/'
   })()
 
   // React Query serializes the query key by value, so this doesn't need to
   // be a stable reference across renders.
-  const filters: LibraryFilters = { q: urlState.q, sort, collection_id: collectionID, uncollected }
-  const library = useLibraryItems(filters)
+  const filters: LibraryEntryFilters = {
+    q: urlState.q,
+    sort,
+    type: type || undefined,
+    collection_id: collectionID,
+    uncollected,
+  }
+  const library = useLibraryEntries(filters)
   const collections = useCollections()
   const addToCollection = useAddItemToCollection()
+  const addShowToCollection = useAddShowToCollection()
   const createCollection = useCreateCollection()
   const deleteItem = useDeleteItem()
+  const trashShow = useTrashShow()
   const restoreItem = useRestoreItem()
   const liveItems = useLiveItems()
   const uploads = useUploads()
   const cardStyle = useCardStyle()
   const { toast } = useToast()
-  const items = library.data?.pages.flatMap((page) => page.items) ?? []
-  const total = library.data?.pages[0]?.total ?? 0
-  // Phase 5: "Continue watching" — dedicated server-side query (in_progress
-  // filter, most recently watched first) so it covers the whole catalog, not
-  // just the library pages fetched so far. Only on the default view: any
-  // active search or collection filter narrows the intent, so we hide it
-  // there. Capped: it's a shortcut row, not a second library.
+  const entries = library.data?.pages.flatMap((page) => page.entries) ?? []
+  // "Continue watching" is its own server-side query so it covers the whole
+  // catalog. A search or collection filter narrows the intent and hides it;
+  // the All · Shows · Movies tabs sit below it and scope only the grid.
+  // Capped: it's a shortcut row, not a second library.
   const showContinueWatching = !urlState.q && collectionID == null && !uncollected
   const continueQuery = useContinueWatching(showContinueWatching)
   const continueWatching = showContinueWatching
-    ? (continueQuery.data?.items ?? []).filter((item) => item.available).slice(0, 8)
+    ? (continueQuery.data?.entries ?? [])
+        .filter((entry) => (entry.kind === 'show' ? entry.up_next?.available : entry.available))
+        .slice(0, 8)
     : []
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -163,8 +187,9 @@ export function LibraryPage() {
 
   // 4.1: selection mode. null = off; a Set (possibly empty) = active.
   // Per-visit state by design — never in the URL; exiting clears it.
-  const [selection, setSelection] = useState<Set<number> | null>(null)
-  const selectionAnchor = useRef<number | null>(null)
+  // Keys are entryKey()s, so a show and an item sharing an id stay distinct.
+  const [selection, setSelection] = useState<Set<string> | null>(null)
+  const selectionAnchor = useRef<string | null>(null)
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const [batchFilter, setBatchFilter] = useState('')
   const selectionActive = selection != null
@@ -175,32 +200,32 @@ export function LibraryPage() {
     selectionAnchor.current = null
     setSelection(new Set())
   }
-  const enterSelection = (id: number) => {
-    selectionAnchor.current = id
-    setSelection(new Set([id]))
+  const enterSelection = (key: string) => {
+    selectionAnchor.current = key
+    setSelection(new Set([key]))
   }
   const exitSelection = () => {
     selectionAnchor.current = null
     setSelection(null)
     setBatchDeleteOpen(false)
   }
-  const toggleSelected = (id: number, shiftRange: boolean) => {
+  const toggleSelected = (key: string, shiftRange: boolean) => {
     setSelection((prev) => {
       if (!prev) return prev
       const next = new Set(prev)
       const anchor = selectionAnchor.current
       if (shiftRange && anchor != null) {
-        const ids = items.map((item) => item.id)
-        const from = ids.indexOf(anchor)
-        const to = ids.indexOf(id)
+        const keys = entries.map(entryKey)
+        const from = keys.indexOf(anchor)
+        const to = keys.indexOf(key)
         if (from !== -1 && to !== -1) {
-          for (let i = Math.min(from, to); i <= Math.max(from, to); i++) next.add(ids[i])
+          for (let i = Math.min(from, to); i <= Math.max(from, to); i++) next.add(keys[i])
           return next
         }
       }
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      selectionAnchor.current = id
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      selectionAnchor.current = key
       return next
     })
   }
@@ -287,7 +312,7 @@ export function LibraryPage() {
     library.isFetchingNextPage,
     library.hasNextPage,
     library.fetchNextPage,
-    items.length,
+    entries.length,
   ])
 
   const onFileInput = () => {
@@ -326,53 +351,65 @@ export function LibraryPage() {
   const runOrToast = makeRunOrToast(toast)
 
   // Batch actions act on the intersection of the selection and the currently
-  // loaded items — ids that vanished (or arrived via SSE untracked) are
+  // loaded entries — keys that vanished (or arrived via SSE untracked) are
   // ignored rather than erroring.
-  const selectedItems = () => items.filter((item) => selection?.has(item.id))
+  const selectedEntries = () => entries.filter((entry) => selection?.has(entryKey(entry)))
+
+  const addEntry = (collectionID: number, entry: LibraryEntry) =>
+    entry.kind === 'show'
+      ? addShowToCollection.mutateAsync({ collectionID, showID: entry.id })
+      : addToCollection.mutateAsync({ collectionID, itemID: entry.id })
 
   const onBatchAddToCollection = async (collection: Collection) => {
-    const targets = selectedItems()
+    const targets = selectedEntries()
     const ok = await runOrToast(async () => {
-      for (const item of targets) {
-        if (item.collection_ids.includes(collection.id)) continue
-        await addToCollection.mutateAsync({ collectionID: collection.id, itemID: item.id })
+      for (const entry of targets) {
+        if (entry.collection_ids.includes(collection.id)) continue
+        await addEntry(collection.id, entry)
       }
     }, "Couldn't add to collection")
     if (!ok) return
-    toast({ message: `Added ${countLabel(targets.length)} to ${collection.name}` })
+    toast({ message: `Added ${entriesLabel(targets)} to ${collection.name}` })
     exitSelection()
   }
 
   const onBatchCreateCollectionAndAdd = async (name: string) => {
+    const targets = selectedEntries()
     const ok = await runOrToast(async () => {
       const collection = await createCollection.mutateAsync(name)
-      for (const item of selectedItems()) {
-        await addToCollection.mutateAsync({ collectionID: collection.id, itemID: item.id })
-      }
+      for (const entry of targets) await addEntry(collection.id, entry)
     }, "Couldn't create collection")
     if (!ok) return
-    toast({ message: `Added ${countLabel(selectedItems().length)} to ${name}` })
+    toast({ message: `Added ${entriesLabel(targets)} to ${name}` })
     exitSelection()
   }
 
+  // A show goes to the trash with every live episode; undo restores each one.
   const onBatchDelete = async () => {
-    const targets = selectedItems()
-    const trashed: ItemSummary[] = []
+    const targets = selectedEntries()
+    const trashed: LibraryEntry[] = []
+    const restoreIDs: number[] = []
     const ok = await runOrToast(async () => {
-      for (const item of targets) {
-        await deleteItem.mutateAsync(item.id)
-        trashed.push(item)
+      for (const entry of targets) {
+        if (entry.kind === 'show') {
+          const { item_ids } = await trashShow.mutateAsync(entry.id)
+          restoreIDs.push(...item_ids)
+        } else {
+          await deleteItem.mutateAsync(entry.id)
+          restoreIDs.push(entry.id)
+        }
+        trashed.push(entry)
       }
     }, "Couldn't move to trash")
     setBatchDeleteOpen(false)
     if (trashed.length > 0) {
       toast({
-        message: `${countLabel(trashed.length)} moved to trash`,
+        message: `${entriesLabel(trashed)} moved to trash`,
         action: {
           label: 'Undo',
           onClick: () => {
             void runOrToast(async () => {
-              for (const item of trashed) await restoreItem.mutateAsync(item.id)
+              for (const id of restoreIDs) await restoreItem.mutateAsync(id)
             }, "Couldn't restore items")
           },
         },
@@ -380,6 +417,15 @@ export function LibraryPage() {
     }
     if (ok) exitSelection()
   }
+
+  const selectedNow = selectedEntries()
+  const libraryEmpty =
+    !library.isPending &&
+    entries.length === 0 &&
+    !type &&
+    !urlState.q &&
+    collectionID == null &&
+    !uncollected
 
   return (
     <main
@@ -517,74 +563,85 @@ export function LibraryPage() {
         </div>
       )}
 
-      {library.isPending && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
-          {Array.from({ length: 12 }, (_, i) => (
-            <Skeleton key={i} className="aspect-video" />
-          ))}
-        </div>
-      )}
-
       {library.isError && <EmptyMessage text="Can't load the library" />}
 
       {continueWatching.length > 0 && (
-        <ContinueWatchingRow items={continueWatching} cardStyle={cardStyle} />
+        <ContinueWatchingRow entries={continueWatching} cardStyle={cardStyle} libraryPath={libraryPath} />
       )}
 
-      {!library.isPending && !library.isError && items.length === 0 && (
+      {!library.isError && !libraryEmpty && (
+        <div className="mb-4 flex items-center justify-between text-sm text-secondary">
+          <LibraryTypeTabs value={type} onChange={setType} />
+          <div className="flex items-center gap-4">
+            {urlState.q && <span className="hidden sm:inline">Search results for "{urlState.q}"</span>}
+            {!selectionActive && entries.length > 0 && (
+              <button
+                type="button"
+                onClick={startSelection}
+                className="text-secondary hover:text-primary -my-1 inline-flex items-center gap-1.5 py-1"
+              >
+                <ListChecks aria-hidden className="size-4" strokeWidth={1.75} />
+                Select
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {library.isPending && <SkeletonGrid count={12} />}
+
+      {!library.isPending && !library.isError && entries.length === 0 && (
         <EmptyMessage
           text={
             urlState.q
               ? 'No matching videos'
-              : uncollected
-                ? 'Everything is in a collection'
-                : 'Library is empty'
+              : type === 'show'
+                ? 'No shows'
+                : type === 'movie'
+                  ? 'No movies'
+                  : uncollected
+                    ? 'Everything is in a collection'
+                    : collectionID != null
+                      ? 'Nothing in this collection'
+                      : 'Library is empty'
           }
         />
       )}
 
-      {items.length > 0 && (
+      {entries.length > 0 && (
         <>
-          <div className="mb-4 flex items-center justify-between text-sm text-secondary">
-            <span>{total} items</span>
-            <div className="flex items-center gap-4">
-              {urlState.q && <span>Search results for "{urlState.q}"</span>}
-              {!selectionActive && (
-                <button
-                  type="button"
-                  onClick={startSelection}
-                  className="text-secondary hover:text-primary -my-1 inline-flex items-center gap-1.5 py-1"
-                >
-                  <ListChecks aria-hidden className="size-4" strokeWidth={1.75} />
-                  Select
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
-            {items.map((item) => (
-              <PosterCard
-                key={item.id}
-                item={item}
-                cardStyle={cardStyle}
-                isNew={isRecentlyCreated(item.created_at)}
-                justArrived={liveItems.hasJustArrived(item.id)}
-                libraryPath={libraryPath}
-                selectionMode={selectionActive}
-                selected={selection?.has(item.id) ?? false}
-                onEnterSelection={enterSelection}
-                onToggleSelect={toggleSelected}
-              />
-            ))}
+          <div data-library-grid className={GRID}>
+            {entries.map((entry) => {
+              const key = entryKey(entry)
+              const cardSelection = {
+                active: selectionActive,
+                selected: selection?.has(key) ?? false,
+                onEnter: () => enterSelection(key),
+                onToggle: (shiftRange: boolean) => toggleSelected(key, shiftRange),
+              }
+              return entry.kind === 'show' ? (
+                <ShowCard
+                  key={key}
+                  show={entry}
+                  cardStyle={cardStyle}
+                  libraryPath={libraryPath}
+                  selection={cardSelection}
+                />
+              ) : (
+                <ItemCard
+                  key={key}
+                  item={entry}
+                  cardStyle={cardStyle}
+                  isNew={isRecentlyCreated(entry.created_at)}
+                  justArrived={liveItems.hasJustArrived(entry.id)}
+                  libraryPath={libraryPath}
+                  selection={cardSelection}
+                />
+              )
+            })}
           </div>
           <div ref={sentinelRef} className="h-12" aria-hidden />
-          {library.isFetchingNextPage && (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
-              {Array.from({ length: 6 }, (_, i) => (
-                <Skeleton key={i} className="aspect-video" />
-              ))}
-            </div>
-          )}
+          {library.isFetchingNextPage && <SkeletonGrid count={6} />}
         </>
       )}
 
@@ -597,7 +654,7 @@ export function LibraryPage() {
               {selection.size} selected
             </span>
             <Menu
-              aria-label="Add selected items to collection"
+              aria-label="Add selected to collection"
               disabled={selection.size === 0}
               trigger={
                 <>
@@ -642,7 +699,11 @@ export function LibraryPage() {
             <Button variant="ghost" onClick={() => setBatchDeleteOpen(false)}>
               Cancel
             </Button>
-            <Button variant="danger" pending={deleteItem.isPending} onClick={() => void onBatchDelete()}>
+            <Button
+              variant="danger"
+              pending={deleteItem.isPending || trashShow.isPending}
+              onClick={() => void onBatchDelete()}
+            >
               <Trash2 aria-hidden className="size-4" strokeWidth={1.75} />
               Move to trash
             </Button>
@@ -650,447 +711,40 @@ export function LibraryPage() {
         }
       >
         <p className="text-secondary">
-          {countLabel(selection?.size ?? 0)} will move to the root's trash folder.
+          {entriesLabel(selectedNow)} will move to the root's trash folder.
+          {selectedNow.some((entry) => entry.kind === 'show') && ' Shows go with all their episodes.'}
         </p>
       </Dialog>
     </main>
   )
 }
 
-function countLabel(count: number): string {
-  return count === 1 ? '1 item' : `${count} items`
-}
+const GRID =
+  'grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]'
 
-// Phase 5: horizontal "Continue watching" strip. Its own <section> container so
-// its cards' keys never collide with the grid's PosterCards below (same item
-// ids appear in both). Compact cards link straight to /watch to resume.
-function ContinueWatchingRow({ items, cardStyle }: { items: ItemSummary[]; cardStyle: CardStyle }) {
-  const trackRef = useRef<HTMLDivElement>(null)
-  // Mouse drag-to-swipe. Touch devices get native swipe + CSS snap from
-  // overflow scroll; this adds the same gesture for desktop pointers. CSS
-  // snap is suspended while dragging (it fights direct scrollLeft writes).
-  // Release keeps the flick's momentum: velocity is sampled during the drag,
-  // the destination is projected from it, snapped to a card edge, and the row
-  // decelerates there with an rAF ease-out — so a fast flick launches at the
-  // hand's speed and eases in, instead of the browser's canned smooth-scroll.
-  const drag = useRef({
-    active: false,
-    moved: false,
-    startX: 0,
-    startScroll: 0,
-    lastX: 0,
-    lastT: 0,
-    velocity: 0, // px/ms, positive = scrolling right
-  })
-  const glide = useRef<number | null>(null)
-
-  const stopGlide = () => {
-    if (glide.current != null) {
-      cancelAnimationFrame(glide.current)
-      glide.current = null
-    }
-  }
-  useEffect(() => stopGlide, [])
-
-  const onPointerDown = (e: PointerEvent) => {
-    if (e.pointerType !== 'mouse' || e.button !== 0) return
-    const el = trackRef.current
-    if (!el) return
-    stopGlide()
-    drag.current = {
-      active: true,
-      moved: false,
-      startX: e.clientX,
-      startScroll: el.scrollLeft,
-      lastX: e.clientX,
-      lastT: e.timeStamp,
-      velocity: 0,
-    }
-  }
-
-  const onPointerMove = (e: PointerEvent) => {
-    const el = trackRef.current
-    if (!el || !drag.current.active) return
-    const dx = e.clientX - drag.current.startX
-    if (!drag.current.moved && Math.abs(dx) < 4) return
-    if (!drag.current.moved) {
-      drag.current.moved = true
-      el.style.scrollSnapType = 'none'
-      el.setPointerCapture(e.pointerId)
-    }
-    // Exponentially-smoothed velocity: responsive to the latest hand speed but
-    // not jittery, and a pause before release correctly decays it toward 0.
-    const dt = e.timeStamp - drag.current.lastT
-    if (dt > 0) {
-      const instant = -(e.clientX - drag.current.lastX) / dt
-      const blend = Math.min(1, dt / 50)
-      drag.current.velocity += (instant - drag.current.velocity) * blend
-    }
-    drag.current.lastX = e.clientX
-    drag.current.lastT = e.timeStamp
-    el.scrollLeft = drag.current.startScroll - dx
-  }
-
-  const endDrag = () => {
-    const el = trackRef.current
-    drag.current.active = false
-    if (!el) return
-    if (!drag.current.moved) {
-      // A press that never became a drag (e.g. a click that interrupted a
-      // glide) must still hand scroll snapping back to CSS.
-      el.style.scrollSnapType = ''
-      return
-    }
-    const maxScroll = el.scrollWidth - el.clientWidth
-    // Project where the flick would land under constant deceleration
-    // (iOS-style: distance ∝ velocity), then settle on the card edge nearest
-    // the projection. A slow release projects ~nowhere and snaps to the
-    // nearest edge as before; a flick carries one or more cards further.
-    const projected = Math.max(0, Math.min(maxScroll, el.scrollLeft + drag.current.velocity * 180))
-    // Candidates in scroll-space (card position relative to the track, not
-    // the page — offsetLeft is unreliable here because the track is not the
-    // cards' offsetParent). Edges are clamped — cards near the end can't
-    // reach the left edge — plus the very end of the track, so a drag near
-    // the end settles flush against it instead of pulling back to a card edge.
-    const trackLeft = el.getBoundingClientRect().left
-    const candidates = (Array.from(el.children) as HTMLElement[]).map((card) =>
-      Math.min(card.getBoundingClientRect().left - trackLeft + el.scrollLeft, maxScroll),
-    )
-    candidates.push(maxScroll)
-    let target = 0
-    let bestDist = Infinity
-    for (const left of candidates) {
-      const dist = Math.abs(left - projected)
-      if (dist < bestDist) {
-        bestDist = dist
-        target = left
-      }
-    }
-
-    // Glide there with an rAF tween whose initial slope matches the release
-    // velocity, so the hand-off from drag to animation is seamless. Cubic
-    // ease-out — fast launch, long soft landing.
-    const from = el.scrollLeft
-    const distance = target - from
-    if (Math.abs(distance) < 1) {
-      el.style.scrollSnapType = ''
-      return
-    }
-    // Duration from velocity: a hard flick gets a longer, more cinematic
-    // glide; a nudge settles quickly. Clamped so it never drags on.
-    const speed = Math.abs(drag.current.velocity)
-    const duration = Math.max(300, Math.min(900, 300 + speed * 250))
-    let start: number | null = null
-    const tick = (now: number) => {
-      if (start == null) start = now
-      const t = Math.min(1, (now - start) / duration)
-      const eased = 1 - (1 - t) ** 3
-      el.scrollLeft = from + distance * eased
-      if (t < 1) {
-        glide.current = requestAnimationFrame(tick)
-      } else {
-        glide.current = null
-        // Re-enable CSS snap only after the glide settles — flipping it back
-        // on mid-flight makes the browser snap instantly and kills the motion.
-        el.style.scrollSnapType = ''
-      }
-    }
-    glide.current = requestAnimationFrame(tick)
-  }
-
+function SkeletonGrid({ count }: { count: number }) {
   return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-lg font-semibold">Continue watching</h2>
-      <div
-        ref={trackRef}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onClickCapture={(e) => {
-          if (drag.current.moved) {
-            e.preventDefault()
-            e.stopPropagation()
-            drag.current.moved = false
-          }
-        }}
-        onDragStart={(e) => e.preventDefault()}
-        className="scrollbar-none flex cursor-grab snap-x snap-mandatory gap-4 overflow-x-auto pb-2 select-none active:cursor-grabbing"
-      >
-        {items.map((item) => (
-          <ContinueCard key={item.id} item={item} cardStyle={cardStyle} />
-        ))}
-      </div>
-    </section>
-  )
-}
-
-// thumb_url is versioned (?v= appears when the thumbnail lands, changes when
-// it regenerates), so a new URL means an earlier load failure no longer
-// applies: re-seed during render to remount the <img> and retry.
-function useThumbRetry(thumbUrl: string) {
-  const [brokenThumb, setBrokenThumb] = useState(false)
-  const [syncedThumbUrl, setSyncedThumbUrl] = useState(thumbUrl)
-  if (thumbUrl !== syncedThumbUrl) {
-    setSyncedThumbUrl(thumbUrl)
-    setBrokenThumb(false)
-  }
-  const markThumbBroken = useCallback(() => setBrokenThumb(true), [])
-  return { brokenThumb, markThumbBroken }
-}
-
-function ContinueCard({ item, cardStyle }: { item: ItemSummary; cardStyle: CardStyle }) {
-  const { brokenThumb, markThumbBroken } = useThumbRetry(item.thumb_url)
-  const progress = progressPercent(item.progress?.position_s, item.duration_s)
-  // Match the library grid card exactly: Minimal overlays the title on the
-  // thumbnail, Compact shows a title + metadata strip below. Reuses the same
-  // PosterThumb/PosterMeta + Card chrome as PosterCard so the two rows stay
-  // consistent whichever card style is chosen. The whole card resumes playback.
-  const showMeta = cardStyle !== 'minimal'
-  const overlayTitle = cardStyle === 'minimal' ? item.title : undefined
-  const meta = [item.year, formatDuration(item.duration_s)].filter(Boolean).join(' · ')
-  return (
-    <Link
-      to={`/watch/${item.id}`}
-      state={{ from: '/' }}
-      aria-label={`Resume ${item.title}`}
-      className="w-56 shrink-0 snap-start sm:w-64"
-    >
-      <Card interactive>
-        <PosterThumb
-          item={item}
-          isNew={false}
-          progress={progress}
-          overlayTitle={overlayTitle}
-          brokenThumb={brokenThumb}
-          onError={markThumbBroken}
-        />
-        {showMeta && <PosterMeta title={item.title} meta={meta} />}
-      </Card>
-    </Link>
-  )
-}
-
-function PosterCard({
-  item,
-  cardStyle,
-  isNew,
-  justArrived,
-  libraryPath,
-  selectionMode,
-  selected,
-  onEnterSelection,
-  onToggleSelect,
-}: {
-  item: ItemSummary
-  cardStyle: CardStyle
-  isNew: boolean
-  justArrived: boolean
-  libraryPath: string
-  selectionMode: boolean
-  selected: boolean
-  onEnterSelection: (id: number) => void
-  onToggleSelect: (id: number, shiftRange: boolean) => void
-}) {
-  const { brokenThumb, markThumbBroken } = useThumbRetry(item.thumb_url)
-  const progress = item.progress?.completed
-    ? 100
-    : progressPercent(item.progress?.position_s, item.duration_s)
-  const meta = [item.year, formatDuration(item.duration_s)].filter(Boolean).join(' · ')
-  // 'minimal' overlays the title on the poster; 'compact' keeps a title +
-  // metadata strip below it.
-  const showMeta = cardStyle !== 'minimal'
-  const overlayTitle = cardStyle === 'minimal' ? item.title : undefined
-
-  // 4.1: long-press (touch) enters selection mode. The press is cancelled by
-  // lift/movement; when it fires, the release click is swallowed so it
-  // doesn't immediately untoggle the item it just selected.
-  const longPressTimer = useRef<number | null>(null)
-  const pressOrigin = useRef<{ x: number; y: number } | null>(null)
-  const suppressClick = useRef(false)
-  useEffect(
-    () => () => {
-      if (longPressTimer.current != null) window.clearTimeout(longPressTimer.current)
-    },
-    [],
-  )
-  const cancelLongPress = () => {
-    if (longPressTimer.current != null) {
-      window.clearTimeout(longPressTimer.current)
-      longPressTimer.current = null
-    }
-    pressOrigin.current = null
-  }
-
-  return (
-    <Card
-      interactive
-      className={[
-        'group relative select-none [-webkit-touch-callout:none]',
-        selected ? 'ring-2 ring-accent' : '',
-        justArrived ? 'animate-[card-enter_var(--duration-slow)_var(--easing-out)]' : '',
-      ].join(' ')}
-      onPointerDown={(event) => {
-        if (event.pointerType === 'mouse' || selectionMode) return
-        pressOrigin.current = { x: event.clientX, y: event.clientY }
-        longPressTimer.current = window.setTimeout(() => {
-          longPressTimer.current = null
-          suppressClick.current = true
-          onEnterSelection(item.id)
-        }, 500)
-      }}
-      onPointerMove={(event) => {
-        const origin = pressOrigin.current
-        if (!origin || longPressTimer.current == null) return
-        if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) cancelLongPress()
-      }}
-      onPointerUp={cancelLongPress}
-      onPointerCancel={cancelLongPress}
-      onPointerLeave={cancelLongPress}
-      onClickCapture={
-        selectionMode
-          ? (event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              if (suppressClick.current) {
-                suppressClick.current = false
-                return
-              }
-              onToggleSelect(item.id, event.shiftKey)
-            }
-          : undefined
-      }
-    >
-      {item.available ? (
-        <>
-          {/* 3.1: the poster plays instantly; in Compact the title strip below
-              opens details. Delete / add-to-collection live in selection mode. */}
-          <Link to={`/watch/${item.id}`} state={{ from: libraryPath }} aria-label={`Play ${item.title}`} className="block">
-            <PosterThumb
-              item={item}
-              isNew={isNew}
-              progress={progress}
-              overlayTitle={overlayTitle}
-              brokenThumb={brokenThumb}
-              onError={markThumbBroken}
-            />
-          </Link>
-          {showMeta && (
-            <Link to={`/items/${item.id}`} state={{ from: libraryPath }} className="block">
-              <PosterMeta title={item.title} meta={meta} />
-            </Link>
-          )}
-        </>
-      ) : (
-        <Link to={`/items/${item.id}`} state={{ from: libraryPath }} className="block">
-          <PosterThumb
-            item={item}
-            isNew={isNew}
-            progress={progress}
-            overlayTitle={overlayTitle}
-            brokenThumb={brokenThumb}
-            onError={markThumbBroken}
-          />
-          {showMeta && <PosterMeta title={item.title} meta={meta} />}
-        </Link>
-      )}
-      {/* 4.1: cards carry no chrome while browsing. In selection mode each card
-          shows a checkbox; the card's capture handler owns the actual toggle
-          (so a click anywhere on the card counts), but keeping this a focusable
-          role=checkbox means keyboard + screen-reader selection still work —
-          Space/Enter here dispatches a click the card intercepts. */}
-      {selectionMode && (
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={selected}
-          aria-label={`Select ${item.title}`}
-          className={[
-            'absolute top-2 left-2 z-10 flex size-6 items-center justify-center rounded-full border',
-            selected
-              ? 'bg-accent-fill text-on-accent border-transparent'
-              : 'bg-overlay border-white/70 backdrop-blur-sm',
-          ].join(' ')}
-        >
-          {selected && <Check aria-hidden className="size-4" strokeWidth={2.5} />}
-        </button>
-      )}
-    </Card>
-  )
-}
-
-function PosterThumb({
-  item,
-  isNew,
-  progress,
-  overlayTitle,
-  brokenThumb,
-  onError,
-}: {
-  item: ItemSummary
-  isNew: boolean
-  progress: number
-  /** Minimal style: title rendered over a scrim at the poster's bottom edge. */
-  overlayTitle?: string
-  brokenThumb: boolean
-  onError: () => void
-}) {
-  return (
-    <div className="bg-inset relative aspect-video overflow-hidden">
-      {!brokenThumb ? (
-        <img
-          src={item.thumb_url}
-          alt=""
-          loading="lazy"
-          onError={onError}
-          className={[
-            'h-full w-full object-cover transition-[filter,opacity] duration-[var(--duration-fast)]',
-            item.available ? '' : 'opacity-40 grayscale',
-          ].join(' ')}
-        />
-      ) : (
-        <div
-          className={[
-            'flex h-full w-full items-center justify-center',
-            item.available ? 'text-tertiary' : 'text-disabled opacity-70',
-          ].join(' ')}
-        >
-          <Clapperboard aria-hidden className="size-10" strokeWidth={1.5} />
-        </div>
-      )}
-      {!item.available && (
-        <span className="bg-raised text-secondary border-line absolute top-2 right-2 inline-flex size-8 items-center justify-center rounded-sm border">
-          <HardDrive aria-hidden className="size-4" strokeWidth={1.75} />
-        </span>
-      )}
-      {isNew && (
-        <span className="bg-accent-fill text-accent-contrast absolute top-2 left-2 rounded-sm px-2 py-1 text-xs font-semibold">
-          New
-        </span>
-      )}
-      {overlayTitle && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent px-2.5 pt-10 pb-2.5">
-          <h2 className="truncate text-sm font-medium text-white">{overlayTitle}</h2>
-        </div>
-      )}
-      {progress > 0 && (
-        <span className="bg-progress-track absolute inset-x-0 bottom-0 h-[3px]">
-          <span className="bg-accent-fill block h-full rounded-full" style={{ width: `${progress}%` }} />
-        </span>
-      )}
+    <div className={GRID}>
+      {Array.from({ length: count }, (_, i) => (
+        <Skeleton key={i} className="aspect-video" />
+      ))}
     </div>
   )
 }
 
-// The library grid shows metadata only in Compact (Minimal overlays the title
-// on the poster instead): a tight 13px title with a smaller, closer meta line.
-function PosterMeta({ title, meta }: { title: string; meta: string }) {
-  return (
-    <div className="p-2">
-      <h2 className="truncate text-sm font-medium leading-snug">{title}</h2>
-      <p className="mt-0.5 truncate text-xs text-secondary">{meta}</p>
-    </div>
-  )
+function entryKey(entry: LibraryEntry): string {
+  return `${entry.kind}:${entry.id}`
+}
+
+/** `1 show and 2 items`, `3 items`, `1 show`. */
+function entriesLabel(entries: LibraryEntry[]): string {
+  const shows = entries.filter((entry) => entry.kind === 'show').length
+  const items = entries.length - shows
+  const parts = [
+    shows > 0 ? (shows === 1 ? '1 show' : `${shows} shows`) : '',
+    items > 0 || shows === 0 ? (items === 1 ? '1 item' : `${items} items`) : '',
+  ].filter(Boolean)
+  return parts.join(' and ')
 }
 
 /** Filterable collection list with a create row — used by the selection action

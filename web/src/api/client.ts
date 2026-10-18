@@ -4,12 +4,14 @@ import type { ApiErrorBody } from './types.ts'
 export class ApiError extends Error {
   readonly code: string
   readonly status: number
+  readonly body: ApiErrorBody | null
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, body: ApiErrorBody | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.body = body
   }
 }
 
@@ -24,14 +26,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     let code = 'unknown'
     let message = `${res.status} ${res.statusText}`
+    let body: ApiErrorBody | null = null
     try {
-      const body = (await res.json()) as ApiErrorBody
+      body = (await res.json()) as ApiErrorBody
       code = body.error.code
       message = body.error.message
     } catch {
       // Non-JSON error body; keep the status text.
     }
-    throw new ApiError(res.status, code, message)
+    throw new ApiError(res.status, code, message, body)
   }
   if (res.status === 204) return undefined as T
   return (await res.json()) as T

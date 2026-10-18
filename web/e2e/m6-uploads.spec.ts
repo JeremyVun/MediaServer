@@ -28,7 +28,7 @@ test('upload tray completes and links to the ingested item', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'Library' })).toBeVisible()
 
   const chooserPromise = page.waitForEvent('filechooser')
-  await page.getByRole('button', { name: 'Upload' }).click()
+  await page.getByRole('button', { name: 'Upload', exact: true }).click()
   const chooser = await chooserPromise
   await chooser.setFiles({ name: 'Upload.Sample.mp4', mimeType: 'video/mp4', buffer: file })
 
@@ -129,8 +129,9 @@ async function mockUploadServer(page: Page): Promise<MockState> {
       return
     }
 
-    if (request.method() === 'GET' && path === '/api/items') {
-      await json(route, { total: state.items.length, items: state.items })
+    if (request.method() === 'GET' && path === '/api/library') {
+      const entries = url.searchParams.get('in_progress') === '1' ? [] : state.items
+      await json(route, { total: entries.length, entries: entries.map((item) => ({ kind: 'item', ...item })) })
       return
     }
 
@@ -190,6 +191,11 @@ function summary(id: number, title: string) {
     thumb_url: `/api/items/${id}/thumb`,
     available: true,
     collection_ids: [],
+    show: null,
+    season: null,
+    episode: null,
+    episode_end: null,
+    needs_check: false,
   }
 }
 

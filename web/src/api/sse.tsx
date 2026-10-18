@@ -9,11 +9,12 @@ import {
 } from 'react'
 import { useQueryClient, type InfiniteData, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { useToast } from '../ui/index.ts'
-import type { LibraryFilters } from './queries.ts'
+import type { LibraryEntryFilters, LibraryFilters } from './queries.ts'
 import type {
   Health,
   ItemList,
   ItemSummary,
+  LibraryList,
   RootInfo,
   UploadCompleteEvent,
   UploadProgressEvent,
@@ -59,16 +60,24 @@ export function SSEProvider({ children }: { children: ReactNode }) {
 
     const refreshItems = () => {
       void queryClient.invalidateQueries({ queryKey: ['items'], refetchType: 'active' })
+      void queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' })
       void queryClient.invalidateQueries({ queryKey: ['continue-watching'], refetchType: 'active' })
     }
     const refreshItem = (id: number) => {
       void queryClient.invalidateQueries({ queryKey: ['item', id], refetchType: 'active' })
     }
-    // A reconnect may have missed events, so heal both list caches — search
+    // Show events carry only an id, so the grid heals by refetching.
+    const refreshShow = (id: number) => {
+      void queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' })
+      void queryClient.invalidateQueries({ queryKey: ['continue-watching'], refetchType: 'active' })
+      void queryClient.invalidateQueries({ queryKey: ['show', id], refetchType: 'active' })
+    }
+    // A reconnect may have missed events, so heal every list cache — search
     // results live under a separate ['search', q] key (see api/queries.ts).
     const refreshAll = () => {
       refreshItems()
       void queryClient.invalidateQueries({ queryKey: ['search'], refetchType: 'active' })
+      void queryClient.invalidateQueries({ queryKey: ['show'], refetchType: 'active' })
     }
 
     source.onopen = refreshAll
@@ -91,7 +100,11 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       const item = parseEventData<ItemSummary>(event)
       if (!item) return
       patchItemInLists(queryClient, item)
+      patchItemInLibrary(queryClient, item)
       refreshItem(item.id)
+      if (item.show) {
+        void queryClient.invalidateQueries({ queryKey: ['show', item.show.id], refetchType: 'active' })
+      }
       // The continue-watching rail is a plain (non-infinite) query with its
       // own membership rules; refetch rather than patch in place.
       void queryClient.invalidateQueries({ queryKey: ['continue-watching'], refetchType: 'active' })
@@ -102,7 +115,22 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       if (!payload) return
       queryClient.removeQueries({ queryKey: ['item', payload.id] })
       removeItemFromLists(queryClient, payload.id)
+      removeItemFromLibrary(queryClient, payload.id)
       void queryClient.invalidateQueries({ queryKey: ['continue-watching'], refetchType: 'active' })
+    })
+
+    for (const type of ['show.added', 'show.updated'] as const) {
+      source.addEventListener(type, (event) => {
+        const payload = parseEventData<RemovedPayload>(event)
+        if (payload) refreshShow(payload.id)
+      })
+    }
+
+    source.addEventListener('show.removed', (event) => {
+      const payload = parseEventData<RemovedPayload>(event)
+      if (!payload) return
+      queryClient.removeQueries({ queryKey: ['show', payload.id] })
+      refreshShow(payload.id)
     })
 
     source.addEventListener('root.status', (event) => {
@@ -266,6 +294,77 @@ function removeItemFromLists(queryClient: QueryClient, id: number) {
           ...page,
           total: Math.max(0, page.total - 1),
           items: page.items.filter((it) => it.id !== id),
+        })),
+      }
+    })
+  }
+}
+
+function libraryQueries(queryClient: QueryClient) {
+  return queryClient.getQueryCache().findAll({ queryKey: ['library'] })
+}
+
+function hasLibraryItem(data: InfiniteData<LibraryList>, id: number) {
+  return data.pages.some((page) => page.entries.some((e) => e.kind === 'item' && e.id === id))
+}
+
+/** The library grid's counterpart of patchItemInLists. An item that gained a
+    show leaves the grid (its show's own event refetches the show card). */
+function patchItemInLibrary(queryClient: QueryClient, item: ItemSummary) {
+  for (const query of libraryQueries(queryClient)) {
+    const filters = query.queryKey[1] as LibraryEntryFilters | undefined
+    const data = query.state.data as InfiniteData<LibraryList> | undefined
+    if (!filters || !data) continue
+    const narrowed = filters.collection_id != null || !!filters.uncollected || !!filters.type
+    const matches =
+      item.show == null &&
+      (filters.type === 'show' ? false : filters.type === 'movie' ? item.type === 'movie' : true) &&
+      (filters.collection_id != null
+        ? item.collection_ids.includes(filters.collection_id)
+        : filters.uncollected
+          ? item.collection_ids.length === 0
+          : true)
+    if (!hasLibraryItem(data, item.id)) {
+      if (matches && narrowed) {
+        void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true, refetchType: 'active' })
+      }
+      continue
+    }
+    queryClient.setQueryData<InfiniteData<LibraryList>>(query.queryKey, (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        pages: old.pages.map((page) =>
+          matches
+            ? {
+                ...page,
+                entries: page.entries.map((e) =>
+                  e.kind === 'item' && e.id === item.id ? { kind: 'item' as const, ...item } : e,
+                ),
+              }
+            : {
+                ...page,
+                total: Math.max(0, page.total - 1),
+                entries: page.entries.filter((e) => !(e.kind === 'item' && e.id === item.id)),
+              },
+        ),
+      }
+    })
+  }
+}
+
+function removeItemFromLibrary(queryClient: QueryClient, id: number) {
+  for (const query of libraryQueries(queryClient)) {
+    const data = query.state.data as InfiniteData<LibraryList> | undefined
+    if (!data || !hasLibraryItem(data, id)) continue
+    queryClient.setQueryData<InfiniteData<LibraryList>>(query.queryKey, (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        pages: old.pages.map((page) => ({
+          ...page,
+          total: Math.max(0, page.total - 1),
+          entries: page.entries.filter((e) => !(e.kind === 'item' && e.id === id)),
         })),
       }
     })

@@ -128,6 +128,16 @@ async function mockM8Server(page: Page): Promise<MockState> {
       return
     }
 
+    if (request.method() === 'GET' && path === '/api/library') {
+      const collectionID = Number(url.searchParams.get('collection_id') ?? 0)
+      const entries =
+        url.searchParams.get('in_progress') === '1'
+          ? []
+          : state.items.filter((item) => !collectionID || item.collection_ids.includes(collectionID))
+      await json(route, { total: entries.length, entries: entries.map((item) => ({ kind: 'item', ...item })) })
+      return
+    }
+
     if (request.method() === 'GET' && path === '/api/items') {
       const trashed = url.searchParams.get('trashed') === '1'
       const collectionID = Number(url.searchParams.get('collection_id') ?? 0)
@@ -194,6 +204,11 @@ function summary(id: number, title: string) {
     thumb_url: `/api/items/${id}/thumb`,
     available: true,
     collection_ids: id === 9 ? [] : [1],
+    show: null,
+    season: null,
+    episode: null,
+    episode_end: null,
+    needs_check: false,
   }
 }
 

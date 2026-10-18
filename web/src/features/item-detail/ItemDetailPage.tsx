@@ -375,7 +375,7 @@ function CollectionChips({ item, collections }: { item: ItemDetail; collections:
                   "Couldn't update collection",
                 )
               }}
-              className="border-line bg-accent-fill text-accent-contrast rounded-full border px-3 py-1.5 text-sm"
+              className="border-line bg-accent-fill text-on-accent rounded-full border px-3 py-1.5 text-sm"
             >
               {collection.name}
             </button>

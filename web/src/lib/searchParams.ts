@@ -8,6 +8,10 @@ export const DEFAULT_LIBRARY_SORT: LibrarySort = 'added'
 
 const VALID_SORTS: LibrarySort[] = ['added', 'title', 'year']
 
+export type LibraryType = '' | 'show' | 'movie'
+
+const VALID_TYPES: LibraryType[] = ['show', 'movie']
+
 /** Sentinel `collection` value meaning "items in no collection". */
 export const UNCOLLECTED = 'none'
 
@@ -18,6 +22,8 @@ export interface LibraryUrlState {
   // True when filtering to items in no collection. Mutually exclusive with
   // collectionID — both share the `collection` URL param.
   uncollected: boolean
+  // All · Shows · Movies; '' is All.
+  type: LibraryType
 }
 
 /** Reads library filter state from URL search params, falling back to
@@ -30,7 +36,9 @@ export function parseLibraryParams(params: URLSearchParams): LibraryUrlState {
   const uncollected = collectionRaw === UNCOLLECTED
   const collectionID =
     collectionRaw && /^\d+$/.test(collectionRaw) ? Number(collectionRaw) : undefined
-  return { q, sort, collectionID, uncollected }
+  const typeRaw = params.get('type')
+  const type = VALID_TYPES.includes(typeRaw as LibraryType) ? (typeRaw as LibraryType) : ''
+  return { q, sort, collectionID, uncollected, type }
 }
 
 function isLibrarySort(value: string | null): value is LibrarySort {
@@ -49,6 +57,7 @@ export function libraryParamUpdates(state: LibraryUrlState): Record<string, stri
       : state.collectionID != null
         ? String(state.collectionID)
         : undefined,
+    type: state.type ? state.type : undefined,
   }
 }
 

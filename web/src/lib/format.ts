@@ -51,3 +51,9 @@ export function isRecentlyCreated(createdAt: string | null | undefined, now = Da
   if (!Number.isFinite(created)) return false
   return now - created < NEW_ITEM_WINDOW_MS
 }
+
+/** `S1 E3`, `S1 E3–4` for a multi-episode file, `Special 2` for season 0. */
+export function formatEpisodeLabel(season: number, episode: number, episodeEnd?: number | null): string {
+  if (season === 0) return `Special ${episode}`
+  return `S${season} E${episode}${episodeEnd ? `–${episodeEnd}` : ''}`
+}
