@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -49,6 +50,10 @@ func Open(path string) (*sql.DB, error) {
 
 // Migrate applies all pending migrations. Safe to call on every startup.
 func Migrate(sqldb *sql.DB) error {
+	return migrateTo(sqldb, math.MaxInt)
+}
+
+func migrateTo(sqldb *sql.DB, target int) error {
 	var current int
 	if err := sqldb.QueryRow("PRAGMA user_version").Scan(&current); err != nil {
 		return fmt.Errorf("read user_version: %w", err)
@@ -63,7 +68,7 @@ func Migrate(sqldb *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		if version <= current {
+		if version <= current || version > target {
 			continue
 		}
 		raw, err := migrationsFS.ReadFile("migrations/" + name)

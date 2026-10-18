@@ -134,7 +134,11 @@ func (s *Server) handleReorderCollection(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid collection order")
 		return
 	}
-	if err := s.store.ReorderCollection(r.Context(), id, req.ItemIDs); err != nil {
+	members := make([]store.CollectionRef, len(req.ItemIDs))
+	for i, itemID := range req.ItemIDs {
+		members[i] = store.CollectionRef{ItemID: itemID}
+	}
+	if err := s.store.ReorderCollection(r.Context(), id, members); err != nil {
 		writeStoreError(w, err)
 		return
 	}

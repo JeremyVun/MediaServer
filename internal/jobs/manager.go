@@ -640,7 +640,7 @@ func (m *Manager) purgeTrashedItem(ctx context.Context, itemID int64) (bool, err
 			return false, err
 		}
 	}
-	if err := m.store.HardDeleteItem(ctx, itemID); err != nil {
+	if _, err := m.store.HardDeleteItem(ctx, itemID); err != nil {
 		return false, err
 	}
 	return true, nil

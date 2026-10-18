@@ -97,11 +97,9 @@ func TestMigration0005CollapsesFailedJobs(t *testing.T) {
 		t.Fatalf("open: %v", err)
 	}
 	defer sqldb.Close()
-	if err := Migrate(sqldb); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if err := migrateTo(sqldb, 4); err != nil {
+		t.Fatalf("migrate to 4: %v", err)
 	}
-	// The jobs schema is unchanged since 0001, so seed rows and rewind the
-	// version to replay 0005 over them.
 	rows := []struct {
 		id     int
 		status string
@@ -116,15 +114,8 @@ func TestMigration0005CollapsesFailedJobs(t *testing.T) {
 			t.Fatalf("seed %d: %v", r.id, err)
 		}
 	}
-	// Rewinding replays 0006 too, so drop its table for the replay.
-	if _, err := sqldb.Exec(`DROP TABLE settings`); err != nil {
-		t.Fatalf("drop settings: %v", err)
-	}
-	if _, err := sqldb.Exec(`PRAGMA user_version = 4`); err != nil {
-		t.Fatalf("rewind: %v", err)
-	}
 	if err := Migrate(sqldb); err != nil {
-		t.Fatalf("replay: %v", err)
+		t.Fatalf("migrate: %v", err)
 	}
 
 	var ids []int

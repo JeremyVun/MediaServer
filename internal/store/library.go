@@ -12,6 +12,13 @@ type Progress struct {
 	PositionS float64
 	DurationS float64
 	Completed bool
+	UpdatedAt string
+}
+
+// ShowRef names the show an episode belongs to.
+type ShowRef struct {
+	ID    int64
+	Title string
 }
 
 type ItemSummary struct {
@@ -25,6 +32,11 @@ type ItemSummary struct {
 	Progress      *Progress
 	CollectionIDs []int64
 	FileIDs       []int64 // ascending, matching ListFilesForItem — the thumb handler's resolution order
+	Show          *ShowRef
+	Season        *int
+	Episode       *int
+	EpisodeEnd    *int
+	NeedsCheck    bool
 }
 
 type SearchItemsOpts struct {
@@ -140,7 +152,7 @@ func (s *Store) SearchItemSummaries(ctx context.Context, opts SearchItemsOpts) (
 		where += " AND mi.id IN (SELECT item_id FROM collection_items WHERE collection_id = ?)"
 		args = append(args, opts.CollectionID)
 	} else if opts.Uncollected {
-		where += " AND mi.id NOT IN (SELECT item_id FROM collection_items)"
+		where += " AND NOT EXISTS (SELECT 1 FROM collection_items ci WHERE ci.item_id = mi.id)"
 	}
 
 	var total int
@@ -203,6 +215,42 @@ func (s *Store) GetItemSummary(ctx context.Context, id int64) (ItemSummary, erro
 	return items[0], nil
 }
 
+// itemSummariesByID hydrates summaries for the given ids, returned in the
+// order of ids; unknown ids are skipped.
+func (s *Store) itemSummariesByID(ctx context.Context, ids []int64) ([]ItemSummary, error) {
+	if len(ids) == 0 {
+		return []ItemSummary{}, nil
+	}
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, summarySelect()+`
+		WHERE mi.id IN (`+placeholders(len(args))+`)
+		GROUP BY mi.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	items, err := scanSummaries(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadSummaryRelations(ctx, items); err != nil {
+		return nil, err
+	}
+	byID := make(map[int64]ItemSummary, len(items))
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	ordered := make([]ItemSummary, 0, len(items))
+	for _, id := range ids {
+		if it, ok := byID[id]; ok {
+			ordered = append(ordered, it)
+		}
+	}
+	return ordered, nil
+}
+
 func FTS5PrefixQuery(q string) string {
 	var terms []string
 	for _, raw := range strings.FieldsFunc(q, func(r rune) bool {
@@ -222,11 +270,13 @@ func summarySelect() string {
 		SELECT mi.id, mi.type, mi.title, mi.year, mi.created_at,
 		       MAX(mf.duration_s) AS duration_s,
 		       CASE WHEN SUM(CASE WHEN mf.status = 'online' AND lr.online = 1 THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS available,
-		       wp.position_s, wp.duration_s, wp.completed
+		       wp.position_s, wp.duration_s, wp.completed, wp.updated_at,
+		       sh.id, sh.title, mi.season, mi.episode, mi.episode_end, mi.needs_check
 		FROM media_items mi
 		LEFT JOIN media_files mf ON mf.item_id = mi.id
 		LEFT JOIN library_roots lr ON lr.id = mf.root_id
-		LEFT JOIN watch_progress wp ON wp.item_id = mi.id`
+		LEFT JOIN watch_progress wp ON wp.item_id = mi.id
+		LEFT JOIN shows sh ON sh.id = mi.show_id`
 }
 
 func scanSummaries(rows *sql.Rows) ([]ItemSummary, error) {
@@ -238,11 +288,21 @@ func scanSummaries(rows *sql.Rows) ([]ItemSummary, error) {
 		var duration sql.NullFloat64
 		var available int
 		var progressPos, progressDur sql.NullFloat64
-		var completed sql.NullInt64
+		var completed, showID, season, episode, episodeEnd sql.NullInt64
+		var progressAt, showTitle sql.NullString
+		var needsCheck int
 		if err := rows.Scan(&it.ID, &it.Type, &it.Title, &year, &it.CreatedAt, &duration, &available,
-			&progressPos, &progressDur, &completed); err != nil {
+			&progressPos, &progressDur, &completed, &progressAt,
+			&showID, &showTitle, &season, &episode, &episodeEnd, &needsCheck); err != nil {
 			return nil, err
 		}
+		if showID.Valid {
+			it.Show = &ShowRef{ID: showID.Int64, Title: showTitle.String}
+		}
+		it.Season = intPtr(season)
+		it.Episode = intPtr(episode)
+		it.EpisodeEnd = intPtr(episodeEnd)
+		it.NeedsCheck = needsCheck != 0
 		if year.Valid {
 			y := int(year.Int64)
 			it.Year = &y
@@ -256,6 +316,7 @@ func scanSummaries(rows *sql.Rows) ([]ItemSummary, error) {
 				PositionS: progressPos.Float64,
 				DurationS: progressDur.Float64,
 				Completed: completed.Valid && completed.Int64 != 0,
+				UpdatedAt: progressAt.String,
 			}
 		}
 		it.CollectionIDs = []int64{}

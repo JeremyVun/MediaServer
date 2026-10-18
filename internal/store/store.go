@@ -6,6 +6,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -46,4 +47,28 @@ func ParseTime(s string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse time %q: %w", s, err)
 	}
 	return t.UTC(), nil
+}
+
+// Nullable is a partial-update field for a nullable column: the zero value
+// leaves the column alone, and Set with a nil Value writes NULL.
+type Nullable[T any] struct {
+	Set   bool
+	Value *T
+}
+
+func SetTo[T any](v T) Nullable[T] { return Nullable[T]{Set: true, Value: &v} }
+
+func SetNull[T any]() Nullable[T] { return Nullable[T]{Set: true} }
+
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func nullableArg[T any](n Nullable[T]) any {
+	if n.Value == nil {
+		return nil
+	}
+	return *n.Value
 }
