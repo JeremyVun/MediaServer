@@ -122,6 +122,8 @@ func TestUpsertProgressCompletion(t *testing.T) {
 		{"rewatch from the start resets", plain, 30, 3000, false, false},
 		{"explicit from the Next card", plain, 2000, 3000, true, true},
 		{"before the credits", withCredits, 3600, 3960, false, false},
+		{"10.1 s short of the credits", withCredits, 3629.9, 3960, false, false},
+		{"9.9 s short of the credits", withCredits, 3630.1, 3960, false, true},
 		{"past the credits marker", withCredits, 3650, 3960, false, true},
 		{"rewatch resets despite credits", withCredits, 10, 3960, false, false},
 	}
@@ -160,6 +162,30 @@ func TestUpsertProgressCompletion(t *testing.T) {
 	stored, _ := f.s.GetProgress(f.ctx, stuck.ID)
 	if !stored.Completed || stored.UpdatedAt != "2026-08-01 20:00:00" {
 		t.Fatalf("stored after re-evaluate = %+v", stored)
+	}
+
+	// Below E5 stopped 5.5 s short of its credits chapter (ruling B7).
+	short := f.item("episode", "Below E5", 2700)
+	shortFiles, _ := f.s.ListFilesForItem(f.ctx, short.ID)
+	if _, err := f.s.UpsertProgress(f.ctx, short.ID, 2291.95, 2700, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.ReplaceFileChapters(f.ctx, shortFiles[0].ID, []store.Chapter{{StartS: 2297.45, EndS: 2700, Title: "Credits"}}); err != nil {
+		t.Fatal(err)
+	}
+	if progress, changed, err := f.s.ReevaluateProgress(f.ctx, short.ID); err != nil || !changed || !progress.Completed {
+		t.Fatalf("Below E5 re-evaluate = %+v changed=%v err=%v", progress, changed, err)
+	}
+	tooShort := f.item("episode", "Stopped 10.1 s short", 2700)
+	tooShortFiles, _ := f.s.ListFilesForItem(f.ctx, tooShort.ID)
+	if _, err := f.s.UpsertProgress(f.ctx, tooShort.ID, 2287.35, 2700, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s.ReplaceFileChapters(f.ctx, tooShortFiles[0].ID, []store.Chapter{{StartS: 2297.45, EndS: 2700, Title: "Credits"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, changed, err := f.s.ReevaluateProgress(f.ctx, tooShort.ID); err != nil || changed {
+		t.Fatalf("10.1 s short re-evaluate changed=%v err=%v", changed, err)
 	}
 	if progress, changed, err := f.s.ReevaluateProgress(f.ctx, plain.ID+1000); err != nil || changed || progress != nil {
 		t.Fatalf("no progress row: %+v %v %v", progress, changed, err)

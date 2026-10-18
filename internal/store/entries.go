@@ -26,6 +26,7 @@ type ShowSummary struct {
 	ID            int64
 	Title         string
 	Year          *int
+	Network       *string
 	PosterAt      *string
 	BackdropAt    *string
 	CreatedAt     string
@@ -495,6 +496,7 @@ func buildShowSummary(show Show, episodes []episodeRow) *ShowSummary {
 		ID:            show.ID,
 		Title:         show.Title,
 		Year:          show.Year,
+		Network:       show.Network,
 		PosterAt:      show.PosterAt,
 		BackdropAt:    show.BackdropAt,
 		CreatedAt:     show.CreatedAt,

@@ -14,8 +14,9 @@ type Show struct {
 	Title        string
 	Year         *int
 	Summary      *string
-	TVmazeID     *int64 // nil = no TVmaze match
-	SeasonOffset int    // TVmaze season = file season + offset
+	Network      *string // TVmaze network, else web channel
+	TVmazeID     *int64  // nil = no TVmaze match
+	SeasonOffset int     // TVmaze season = file season + offset
 	NeedsCheck   bool
 	TitleLocked  bool
 	PosterAt     *string // set when the poster file is cached
@@ -29,6 +30,7 @@ type NewShow struct {
 	Title        string
 	Year         *int
 	Summary      *string
+	Network      *string
 	TVmazeID     *int64
 	SeasonOffset int
 	NeedsCheck   bool
@@ -55,7 +57,7 @@ type ShowEpisode struct {
 	RuntimeMin *int
 }
 
-const showCols = `id, title, year, summary, tvmaze_id, season_offset, needs_check, title_locked,
+const showCols = `id, title, year, summary, network, tvmaze_id, season_offset, needs_check, title_locked,
 	poster_at, backdrop_at, refreshed_at, created_at, updated_at`
 
 func (s *Store) CreateShow(ctx context.Context, in NewShow) (Show, error) {
@@ -74,9 +76,9 @@ func (s *Store) CreateShow(ctx context.Context, in NewShow) (Show, error) {
 		}
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO shows (title, year, summary, tvmaze_id, season_offset, needs_check)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		in.Title, in.Year, in.Summary, in.TVmazeID, in.SeasonOffset, boolToInt(in.NeedsCheck))
+		INSERT INTO shows (title, year, summary, network, tvmaze_id, season_offset, needs_check)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		in.Title, in.Year, in.Summary, in.Network, in.TVmazeID, in.SeasonOffset, boolToInt(in.NeedsCheck))
 	if err != nil {
 		return Show{}, err
 	}
@@ -123,6 +125,7 @@ type UpdateShowParams struct {
 	TitleLocked  *bool
 	Year         Nullable[int]
 	Summary      Nullable[string]
+	Network      Nullable[string]
 	TVmazeID     Nullable[int64]
 	SeasonOffset *int
 	NeedsCheck   *bool
@@ -153,6 +156,9 @@ func (s *Store) UpdateShow(ctx context.Context, id int64, p UpdateShowParams) (S
 	}
 	if p.Summary.Set {
 		set("summary", nullableArg(p.Summary))
+	}
+	if p.Network.Set {
+		set("network", nullableArg(p.Network))
 	}
 	if p.TVmazeID.Set {
 		set("tvmaze_id", nullableArg(p.TVmazeID))
@@ -452,9 +458,9 @@ func showItemIDs(ctx context.Context, q queryer, showID int64) ([]int64, error) 
 func scanShow(row rowScanner) (Show, error) {
 	var sh Show
 	var year, tvmazeID sql.NullInt64
-	var summary, posterAt, backdropAt, refreshedAt sql.NullString
+	var summary, network, posterAt, backdropAt, refreshedAt sql.NullString
 	var needsCheck, titleLocked int
-	err := row.Scan(&sh.ID, &sh.Title, &year, &summary, &tvmazeID, &sh.SeasonOffset,
+	err := row.Scan(&sh.ID, &sh.Title, &year, &summary, &network, &tvmazeID, &sh.SeasonOffset,
 		&needsCheck, &titleLocked, &posterAt, &backdropAt, &refreshedAt, &sh.CreatedAt, &sh.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Show{}, ErrNotFound
@@ -464,6 +470,7 @@ func scanShow(row rowScanner) (Show, error) {
 	}
 	sh.Year = intPtr(year)
 	sh.Summary = stringPtr(summary)
+	sh.Network = stringPtr(network)
 	sh.TVmazeID = int64Ptr(tvmazeID)
 	sh.NeedsCheck = needsCheck != 0
 	sh.TitleLocked = titleLocked != 0

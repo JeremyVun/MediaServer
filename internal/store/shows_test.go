@@ -95,11 +95,11 @@ func TestShowCRUD(t *testing.T) {
 	f := newFixture(t)
 	tvmaze := int64(42)
 	year := 2022
-	show, err := f.s.CreateShow(f.ctx, store.NewShow{Title: " Andor ", Year: &year, TVmazeID: &tvmaze})
+	show, err := f.s.CreateShow(f.ctx, store.NewShow{Title: " Andor ", Year: &year, TVmazeID: &tvmaze, Network: ptr("Disney+")})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if show.Title != "Andor" || show.NeedsCheck || show.SeasonOffset != 0 || *show.TVmazeID != 42 {
+	if show.Title != "Andor" || show.NeedsCheck || show.SeasonOffset != 0 || *show.TVmazeID != 42 || *show.Network != "Disney+" {
 		t.Fatalf("created show = %+v", show)
 	}
 	if _, err := f.s.CreateShow(f.ctx, store.NewShow{Title: "Andor again", TVmazeID: &tvmaze}); !errors.Is(err, store.ErrConflict) {
@@ -122,12 +122,14 @@ func TestShowCRUD(t *testing.T) {
 		PosterAt:     store.SetTo(poster),
 		TVmazeID:     store.SetNull[int64](),
 		Year:         store.SetNull[int](),
+		Network:      store.SetTo("Apple TV"),
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if updated.Title != "Star Wars: Andor" || !updated.TitleLocked || updated.SeasonOffset != 1 ||
-		updated.PosterAt == nil || *updated.PosterAt != poster || updated.TVmazeID != nil || updated.Year != nil {
+		updated.PosterAt == nil || *updated.PosterAt != poster || updated.TVmazeID != nil || updated.Year != nil ||
+		*updated.Network != "Apple TV" {
 		t.Fatalf("updated show = %+v", updated)
 	}
 	if _, err := f.s.UpdateShow(f.ctx, 999, store.UpdateShowParams{NeedsCheck: ptr(false)}); !errors.Is(err, store.ErrNotFound) {

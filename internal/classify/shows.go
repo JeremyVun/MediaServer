@@ -110,7 +110,18 @@ func (s *Service) tvmazeFailure(ctx context.Context, showID int64, err error) er
 // A weak result is never attached; a confident one whose show is already
 // local merges this show into it, as classify would have attached there.
 func (s *Service) rematch(ctx context.Context, show store.Show) error {
-	m, err := s.match(ctx, show.Title, library.ShowKey(show.Title), show.Year)
+	q := showQuery{name: show.Title, key: library.ShowKey(show.Title), year: show.Year}
+	items, err := s.store.ListItemsByShow(ctx, show.ID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.Episode != nil {
+			q.season, q.episode, _ = numbers(item)
+			break
+		}
+	}
+	m, err := s.match(ctx, q)
 	if err != nil {
 		return s.tvmazeFailure(ctx, show.ID, err)
 	}
@@ -118,27 +129,41 @@ func (s *Service) rematch(ctx context.Context, show store.Show) error {
 		_, err := s.store.UpdateShow(ctx, show.ID, store.UpdateShowParams{RefreshedAt: store.SetTo(s.stamp())})
 		return err
 	}
-	id := int64(m.result.ID)
+	s.log.Info("classify: show matched on TVmaze after an outage", "show_id", show.ID, "tvmaze_id", m.result.ID)
+	if _, err := s.adopt(ctx, show, m.result); err != nil {
+		return s.tvmazeFailure(ctx, show.ID, err)
+	}
+	return nil
+}
+
+// adopt gives an unmatched show a confident TVmaze match: aliases are kept,
+// metadata and episode titles refreshed. When another local show already
+// has that match, show merges into it instead. It returns the show the
+// items now belong to; a TVmaze error leaves the match set for a refresh.
+func (s *Service) adopt(ctx context.Context, show store.Show, r tvmaze.Result) (store.Show, error) {
+	id := int64(r.ID)
 	local, err := s.store.GetShowByTVmazeID(ctx, id)
 	if err == nil {
-		s.log.Info("classify: rematched show already local, merging", "show_id", show.ID, "into", local.ID)
-		return s.merge(ctx, show.ID, local.ID)
+		s.log.Info("classify: matched show already local, merging", "show_id", show.ID, "into", local.ID)
+		if err := s.merge(ctx, show.ID, local.ID); err != nil {
+			return store.Show{}, err
+		}
+		return s.store.GetShow(ctx, local.ID)
 	}
 	if !errors.Is(err, store.ErrNotFound) {
-		return err
+		return store.Show{}, err
 	}
 	clear := false
 	if show, err = s.store.UpdateShow(ctx, show.ID, store.UpdateShowParams{
 		TVmazeID:   store.SetTo(id),
 		NeedsCheck: &clear,
 	}); err != nil {
-		return err
+		return store.Show{}, err
 	}
-	s.log.Info("classify: show matched on TVmaze after an outage", "show_id", show.ID, "tvmaze_id", id)
 	if show, err = s.refreshMetadata(ctx, show); err != nil {
-		return s.tvmazeFailure(ctx, show.ID, err)
+		return show, err
 	}
-	return s.afterRefresh(ctx, show)
+	return show, s.afterRefresh(ctx, show)
 }
 
 // refreshMetadata copies TVmaze's show, episode list and missing art into
@@ -172,35 +197,45 @@ func (s *Service) refreshMetadata(ctx context.Context, show store.Show) (store.S
 	if tv.Summary != "" {
 		p.Summary = store.SetTo(tv.Summary)
 	}
+	if tv.Network != "" {
+		p.Network = store.SetTo(tv.Network)
+	}
 	if show, err = s.store.UpdateShow(ctx, show.ID, p); err != nil {
 		return show, err
 	}
 	return s.fetchArt(ctx, show, tv.PosterURL)
 }
 
+// maxBackgroundAttempts bounds how many dead background links are tried.
+const maxBackgroundAttempts = 4
+
 // fetchArt downloads whichever of the poster and backdrop is not cached
-// yet. Art is best effort: a failure leaves it for the next refresh.
+// yet, trying backgrounds best first past dead links (ruling B7). Art is
+// best effort: a failure leaves it for the next refresh.
 func (s *Service) fetchArt(ctx context.Context, show store.Show, posterURL string) (store.Show, error) {
 	var p store.UpdateShowParams
 	if show.PosterAt == nil && posterURL != "" {
-		if err := s.tvmaze.FetchImage(ctx, posterURL, s.PosterPath(show.ID)); err != nil {
+		if err := s.cacheImage(ctx, posterURL, s.PosterPath(show.ID)); err != nil {
 			s.log.Warn("classify: poster download failed", "show_id", show.ID, "error", err)
 		} else {
 			p.PosterAt = store.SetTo(s.stamp())
 		}
 	}
 	if show.BackdropAt == nil {
-		url, err := s.tvmaze.Images(ctx, int(*show.TVmazeID))
-		switch {
-		case err != nil:
+		backgrounds, err := s.tvmaze.Backgrounds(ctx, int(*show.TVmazeID))
+		if err != nil {
 			s.log.Warn("classify: backdrop lookup failed", "show_id", show.ID, "error", err)
-		case url == "":
-		default:
-			if err := s.tvmaze.FetchImage(ctx, url, s.BackdropPath(show.ID)); err != nil {
+		}
+		for _, bg := range backgrounds[:min(len(backgrounds), maxBackgroundAttempts)] {
+			if err := s.cacheImage(ctx, bg.URL, s.BackdropPath(show.ID)); err != nil {
 				s.log.Warn("classify: backdrop download failed", "show_id", show.ID, "error", err)
-			} else {
-				p.BackdropAt = store.SetTo(s.stamp())
+				if ctx.Err() != nil {
+					break
+				}
+				continue
 			}
+			p.BackdropAt = store.SetTo(s.stamp())
+			break
 		}
 	}
 	if ctx.Err() != nil {

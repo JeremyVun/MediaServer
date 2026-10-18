@@ -7,6 +7,7 @@ CREATE TABLE shows (
   title         TEXT NOT NULL,
   year          INTEGER,
   summary       TEXT,
+  network       TEXT,
   tvmaze_id     INTEGER UNIQUE,
   season_offset INTEGER NOT NULL DEFAULT 0,
   needs_check   INTEGER NOT NULL DEFAULT 1,

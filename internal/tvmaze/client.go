@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,6 +49,7 @@ type Options struct {
 	// A 429 whose Retry-After exceeds this surfaces as ErrUnreachable
 	// instead of being waited out in-client.
 	MaxRetryAfter time.Duration
+	Log           *slog.Logger
 }
 
 type Client struct {
@@ -56,6 +58,7 @@ type Client struct {
 	userAgent     string
 	maxRetryAfter time.Duration
 	limiter       *limiter
+	log           *slog.Logger
 }
 
 func New(o Options) *Client {
@@ -64,6 +67,10 @@ func New(o Options) *Client {
 		http:          o.HTTPClient,
 		userAgent:     o.UserAgent,
 		maxRetryAfter: o.MaxRetryAfter,
+		log:           o.Log,
+	}
+	if c.log == nil {
+		c.log = slog.Default()
 	}
 	if c.baseURL == "" {
 		c.baseURL = DefaultBaseURL
@@ -134,9 +141,11 @@ func (c *Client) attempt(ctx context.Context, url string, timeout time.Duration,
 	req.Header.Set("User-Agent", c.userAgent)
 	resp, err := c.http.Do(req)
 	if err != nil {
+		c.log.Debug("tvmaze request", "url", url, "error", err)
 		return 0, c.transportErr(ctx, url, err)
 	}
 	defer resp.Body.Close()
+	c.log.Debug("tvmaze request", "url", url, "status", resp.StatusCode)
 
 	switch {
 	case resp.StatusCode == http.StatusOK:

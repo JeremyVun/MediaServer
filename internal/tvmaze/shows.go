@@ -18,7 +18,9 @@ type Result struct {
 	Year  int // premiere year, 0 when unknown
 	Score float64
 	// Network is the broadcast network, else the web channel (Disney+), else "".
-	Network         string
+	Network string
+	// Country is the ISO code of that network or web channel (US, GB), else "".
+	Country         string
 	PosterURL       string
 	PosterMediumURL string
 }
@@ -28,6 +30,7 @@ type Show struct {
 	Name            string
 	Year            int
 	Summary         string // plain text, paragraphs separated by a blank line
+	Network         string // as on Result
 	PosterURL       string
 	PosterMediumURL string
 	Episodes        []Episode
@@ -58,7 +61,10 @@ type apiShow struct {
 }
 
 type apiName struct {
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	Country *struct {
+		Code string `json:"code"`
+	} `json:"country"`
 }
 
 type apiEpisode struct {
@@ -93,12 +99,7 @@ func (c *Client) Search(ctx context.Context, q string) ([]Result, error) {
 	for _, r := range raw {
 		s := r.Show
 		res := Result{ID: s.ID, Name: s.Name, Year: year(s.Premiered), Score: r.Score}
-		switch {
-		case s.Network != nil:
-			res.Network = s.Network.Name
-		case s.WebChannel != nil:
-			res.Network = s.WebChannel.Name
-		}
+		res.Network, res.Country = s.network()
 		res.PosterURL, res.PosterMediumURL = s.posters()
 		results = append(results, res)
 	}
@@ -111,37 +112,93 @@ func (c *Client) Show(ctx context.Context, id int) (Show, error) {
 	if err := c.getJSON(ctx, fmt.Sprintf("/shows/%d", id), &s); err != nil {
 		return Show{}, err
 	}
-	var eps []apiEpisode
-	if err := c.getJSON(ctx, fmt.Sprintf("/shows/%d/episodes?specials=1", id), &eps); err != nil {
+	eps, err := c.Episodes(ctx, id)
+	if err != nil {
 		return Show{}, err
 	}
-	show := Show{ID: s.ID, Name: s.Name, Year: year(s.Premiered), Summary: StripHTML(s.Summary), Episodes: episodes(eps)}
+	show := Show{ID: s.ID, Name: s.Name, Year: year(s.Premiered), Summary: StripHTML(s.Summary), Episodes: eps}
+	show.Network, _ = s.network()
 	show.PosterURL, show.PosterMediumURL = s.posters()
 	return show, nil
 }
 
-// Images returns the URL of the show's background ("splash") image: the
-// main one if TVmaze marks one, else the widest. "" means none.
-func (c *Client) Images(ctx context.Context, id int) (string, error) {
+// Episodes fetches the show's full episode list, specials included.
+func (c *Client) Episodes(ctx context.Context, id int) ([]Episode, error) {
+	var eps []apiEpisode
+	if err := c.getJSON(ctx, fmt.Sprintf("/shows/%d/episodes?specials=1", id), &eps); err != nil {
+		return nil, err
+	}
+	return episodes(eps), nil
+}
+
+// BackgroundMaxWidth is the widest background preferred; wider ones are
+// only offered when nothing narrower exists.
+const BackgroundMaxWidth = 3840
+
+type Background struct {
+	URL   string
+	Width int // 0 when unknown
+}
+
+// Backgrounds lists the show's background ("splash") images best first:
+// the main one, then the widest up to BackgroundMaxWidth, then wider ones
+// narrowest first.
+func (c *Client) Backgrounds(ctx context.Context, id int) ([]Background, error) {
 	var imgs []apiImage
 	if err := c.getJSON(ctx, fmt.Sprintf("/shows/%d/images", id), &imgs); err != nil {
-		return "", err
+		return nil, err
 	}
-	var best *apiImage
-	for i := range imgs {
-		img := &imgs[i]
+	type candidate struct {
+		Background
+		main bool
+	}
+	var cands []candidate
+	for _, img := range imgs {
 		if img.Type != "background" || img.Resolutions.Original.URL == "" {
 			continue
 		}
-		if best == nil || (img.Main && !best.Main) ||
-			(img.Main == best.Main && img.Resolutions.Original.Width > best.Resolutions.Original.Width) {
-			best = img
+		o := img.Resolutions.Original
+		cands = append(cands, candidate{Background{o.URL, o.Width}, img.Main})
+	}
+	slices.SortStableFunc(cands, func(a, b candidate) int {
+		if a.main != b.main {
+			if a.main {
+				return -1
+			}
+			return 1
 		}
+		aOver, bOver := a.Width > BackgroundMaxWidth, b.Width > BackgroundMaxWidth
+		switch {
+		case aOver != bOver:
+			if aOver {
+				return 1
+			}
+			return -1
+		case aOver:
+			return cmp.Compare(a.Width, b.Width)
+		default:
+			return cmp.Compare(b.Width, a.Width)
+		}
+	})
+	out := make([]Background, len(cands))
+	for i, c := range cands {
+		out[i] = c.Background
 	}
-	if best == nil {
-		return "", nil
+	return out, nil
+}
+
+func (s apiShow) network() (name, country string) {
+	ch := s.Network
+	if ch == nil {
+		ch = s.WebChannel
 	}
-	return best.Resolutions.Original.URL, nil
+	if ch == nil {
+		return "", ""
+	}
+	if ch.Country != nil {
+		country = ch.Country.Code
+	}
+	return ch.Name, country
 }
 
 func (s apiShow) posters() (original, medium string) {

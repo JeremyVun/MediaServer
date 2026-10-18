@@ -8,8 +8,8 @@ import (
 )
 
 // UpsertProgress records the last playback position for an item. It counts
-// as completed when the player says so, at 95 %, or once past the credits
-// marker of the item's first online file (ruling M5). Without the explicit
+// as completed when the player says so, at 95 %, or once within 10 s of the
+// credits marker of the item's first online file (rulings M5, B7). Without the explicit
 // flag an early position resets completion, so a rewatch starts over.
 func (s *Store) UpsertProgress(ctx context.Context, itemID int64, positionS, durationS float64, completedExplicit bool) (Progress, error) {
 	completed := completedExplicit || reachedEnd(positionS, durationS)
@@ -68,8 +68,12 @@ func reachedEnd(positionS, durationS float64) bool {
 	return durationS > 0 && positionS/durationS >= 0.95
 }
 
+// creditsToleranceS forgives a viewer who stopped just short of the credits
+// chapter (ruling B7).
+const creditsToleranceS = 10
+
 func pastCredits(positionS float64, creditsStartS *float64) bool {
-	return creditsStartS != nil && positionS >= *creditsStartS
+	return creditsStartS != nil && positionS >= *creditsStartS-creditsToleranceS
 }
 
 // GetProgress returns nil when the item has no stored playback progress.

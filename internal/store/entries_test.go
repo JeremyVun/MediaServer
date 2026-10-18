@@ -36,7 +36,7 @@ func newCatalog(t *testing.T) *catalog {
 	l.below = f.show("Below")
 	l.carrie = f.show("Carrie")
 	l.dark = f.show("Dark")
-	f.exec(`UPDATE shows SET year = 2022, needs_check = 0 WHERE id = ?`, l.andor.ID)
+	f.exec(`UPDATE shows SET year = 2022, network = 'Disney+', needs_check = 0 WHERE id = ?`, l.andor.ID)
 	f.exec(`UPDATE shows SET year = 2025 WHERE id = ?`, l.below.ID)
 
 	for i, title := range []string{"Kassa", "That Would Be Me", "Reckoning"} {
@@ -199,6 +199,9 @@ func TestListEntriesProgressAndSummaries(t *testing.T) {
 	summary, err := l.s.GetShowSummary(l.ctx, l.andor.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if summary.Network == nil || *summary.Network != "Disney+" {
+		t.Errorf("summary network = %v", summary.Network)
 	}
 	if summary.UpNext == nil || summary.UpNext.ItemID != l.andorEps[1].ID || summary.UpNext.Available || !summary.Available {
 		t.Errorf("offline up next = %+v (show available %v)", summary.UpNext, summary.Available)

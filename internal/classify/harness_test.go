@@ -25,13 +25,22 @@ import (
 )
 
 type tvShow struct {
-	id        int
-	name      string
-	premiered string
-	summary   string
-	episodes  []tvEpisode
-	poster    bool
-	backdrop  bool
+	id          int
+	name        string
+	premiered   string
+	summary     string
+	network     string
+	country     string
+	episodes    []tvEpisode
+	poster      bool
+	backdrop    bool
+	backgrounds []tvBackground // served after the backdrop flag's one
+}
+
+type tvBackground struct {
+	width int
+	main  bool
+	dead  bool // its URL 404s
 }
 
 type tvEpisode struct {
@@ -48,6 +57,9 @@ type fakeTVmaze struct {
 	shows    map[int]tvShow
 	search   map[string][]int // query → show ids, best score first
 	searches []string
+	paths    []string          // every request path, in order
+	images   map[string][]byte // image path → body, else a placeholder
+	dead     map[string]bool   // image paths that 404
 
 	down  atomic.Bool
 	hits  atomic.Int64
@@ -55,7 +67,7 @@ type fakeTVmaze struct {
 }
 
 func newFakeTVmaze(t *testing.T) *fakeTVmaze {
-	f := &fakeTVmaze{shows: map[int]tvShow{}, search: map[string][]int{}}
+	f := &fakeTVmaze{shows: map[int]tvShow{}, search: map[string][]int{}, images: map[string][]byte{}, dead: map[string]bool{}}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -65,9 +77,29 @@ func (f *fakeTVmaze) add(show tvShow, queries ...string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shows[show.id] = show
+	for i, bg := range show.backgrounds {
+		if bg.dead {
+			f.dead[backgroundPath(show.id, i)] = true
+		}
+	}
 	for _, q := range queries {
 		f.search[q] = append(f.search[q], show.id)
 	}
+}
+
+func backgroundPath(showID, i int) string { return fmt.Sprintf("/img/bg-%d-%d.jpg", showID, i) }
+
+// requests counts the requests whose path starts with prefix.
+func (f *fakeTVmaze) requests(prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, p := range f.paths {
+		if strings.HasPrefix(p, prefix) {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeTVmaze) searched() []string {
@@ -87,6 +119,7 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.paths = append(f.paths, r.URL.Path)
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.URL.Path == "/search/shows":
@@ -98,6 +131,14 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, out)
 	case parts[0] == "img":
+		if f.dead[r.URL.Path] {
+			http.NotFound(w, r)
+			return
+		}
+		if body, ok := f.images[r.URL.Path]; ok {
+			w.Write(body)
+			return
+		}
 		w.Write([]byte("image " + r.URL.Path))
 	case parts[0] == "shows" && len(parts) >= 2:
 		id, _ := strconv.Atoi(parts[1])
@@ -121,6 +162,10 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 				imgs = append(imgs, map[string]any{"type": "background", "main": true,
 					"resolutions": map[string]any{"original": map[string]any{"url": f.srv.URL + fmt.Sprintf("/img/bg-%d.jpg", id), "width": 1920}}})
 			}
+			for i, bg := range show.backgrounds {
+				imgs = append(imgs, map[string]any{"type": "background", "main": bg.main,
+					"resolutions": map[string]any{"original": map[string]any{"url": f.srv.URL + backgroundPath(id, i), "width": bg.width}}})
+			}
 			writeJSON(w, imgs)
 		}
 	default:
@@ -130,6 +175,13 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 
 func (f *fakeTVmaze) showJSON(s tvShow) map[string]any {
 	m := map[string]any{"id": s.id, "name": s.name, "premiered": s.premiered, "summary": s.summary}
+	if s.network != "" {
+		network := map[string]any{"name": s.network, "country": nil}
+		if s.country != "" {
+			network["country"] = map[string]any{"code": s.country}
+		}
+		m["network"] = network
+	}
 	if s.poster {
 		url := f.srv.URL + fmt.Sprintf("/img/poster-%d.jpg", s.id)
 		m["image"] = map[string]any{"medium": url, "original": url}

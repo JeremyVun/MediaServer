@@ -44,6 +44,7 @@ type Options struct {
 	TVmaze *tvmaze.Client // shared process-wide: the throttle lives in it
 	Sol    Semantic       // nil disables semantic classification
 	ArtDir string         // {data_dir}/art
+	FFmpeg string         // binary that downscales oversized art; "" = ffmpeg on PATH
 	Now    func() time.Time
 }
 
@@ -54,6 +55,7 @@ type Service struct {
 	tvmaze    *tvmaze.Client
 	sol       Semantic
 	artDir    string
+	ffmpeg    string
 	now       func() time.Time
 	scheduler Scheduler
 	// One classifier at a time, so two episodes of an unseen show can never
@@ -68,6 +70,9 @@ func New(opts Options) *Service {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.FFmpeg == "" {
+		opts.FFmpeg = "ffmpeg"
+	}
 	return &Service{
 		store:  opts.Store,
 		bus:    opts.Bus,
@@ -75,6 +80,7 @@ func New(opts Options) *Service {
 		tvmaze: opts.TVmaze,
 		sol:    opts.Sol,
 		artDir: opts.ArtDir,
+		ffmpeg: opts.FFmpeg,
 		now:    opts.Now,
 		sem:    make(chan struct{}, 1),
 	}
@@ -215,10 +221,12 @@ func (s *Service) Classify(ctx context.Context, itemID int64) error {
 	parsed := library.ParsePath(relPath)
 
 	locked := item.Locked
+	legacyLock := false
 	if !locked {
-		if locked, err = s.ownerEdited(ctx, item, relPath); err != nil {
+		if legacyLock, err = s.ownerEdited(ctx, item, relPath); err != nil {
 			return err
 		}
+		locked = legacyLock
 	}
 
 	g := guessFrom(relPath, parsed, durationS)
@@ -250,7 +258,7 @@ func (s *Service) Classify(ctx context.Context, itemID int64) error {
 		return nil
 	}
 	if locked || item.Locked {
-		return s.classifyLocked(ctx, item, parsed)
+		return s.classifyLocked(ctx, item, parsed, legacyLock && !item.Locked, durationS)
 	}
 	if g.typ != "episode" {
 		return s.fileNonEpisode(ctx, item, g, needsCheck)
@@ -339,12 +347,17 @@ func (s *Service) askSol(ctx context.Context, relPath string, durationS float64)
 	return answer, true
 }
 
-// classifyLocked files an item whose fields belong to the owner. Only a
-// locked episode without a show does anything more: it joins a show through
-// its path so it never breaks the invariant (build ruling B1).
-func (s *Service) classifyLocked(ctx context.Context, item store.Item, parsed library.Parsed) error {
+// classifyLocked files an item whose fields belong to the owner. A locked
+// episode without a show joins one through its path so it never breaks the
+// invariant (build ruling B1). A legacy lock still lets an hour-long video
+// become a movie, since the old parser never wrote movie (ruling B7).
+func (s *Service) classifyLocked(ctx context.Context, item store.Item, parsed library.Parsed, legacyLock bool, durationS float64) error {
 	locked := true
 	p := store.UpdateItemParams{Locked: &locked}
+	if legacyLock && item.Type == "video" && durationS >= movieMinS {
+		movie := "movie"
+		p.Type = &movie
+	}
 	if item.Type != "episode" || item.ShowID != nil {
 		p.ClassifiedAt = store.SetTo(s.stamp())
 		return s.updateItem(ctx, item.ID, p)
@@ -356,7 +369,11 @@ func (s *Service) classifyLocked(ctx context.Context, item store.Item, parsed li
 		s.log.Warn("classify: locked episode has no show name, left pending", "item_id", item.ID)
 		return s.updateItem(ctx, item.ID, p)
 	}
-	show, created, err := s.showFor(ctx, parsed.ShowName, key, parsed.Year)
+	q := showQuery{name: parsed.ShowName, key: key, year: parsed.Year, season: parsed.Season, episode: parsed.Episode}
+	if item.Episode != nil {
+		q.season, q.episode, _ = numbers(item)
+	}
+	show, created, err := s.showFor(ctx, q)
 	if err != nil {
 		return err
 	}
@@ -417,7 +434,9 @@ func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, par
 		s.log.Warn("classify: episode has no show name, left pending", "item_id", item.ID)
 		return s.updateItem(ctx, item.ID, p)
 	}
-	show, created, err := s.showFor(ctx, g.showName, g.showKey, g.year)
+	show, created, err := s.showFor(ctx, showQuery{
+		name: g.showName, key: g.showKey, year: g.year, season: g.season, episode: g.episode,
+	})
 	if err != nil {
 		return err
 	}
@@ -438,19 +457,26 @@ func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, par
 
 // showFor finds or forms the show an episode with this key joins (design
 // "Classification" step 3). Callers hold the lock.
-func (s *Service) showFor(ctx context.Context, name, key string, year *int) (store.Show, bool, error) {
-	alias, err := s.store.GetShowAlias(ctx, key)
+func (s *Service) showFor(ctx context.Context, q showQuery) (store.Show, bool, error) {
+	alias, err := s.store.GetShowAlias(ctx, q.key)
 	if err == nil {
 		show, err := s.store.GetShow(ctx, alias.ShowID)
+		if err != nil || alias.Source != store.AliasAuto || show.TVmazeID != nil || !show.NeedsCheck {
+			return show, false, err
+		}
+		show, err = s.upgrade(ctx, show, q)
 		return show, false, err
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return store.Show{}, false, err
 	}
 
-	m, searchErr := s.match(ctx, name, key, year)
+	m, searchErr := s.match(ctx, q)
 	if ctx.Err() != nil {
 		return store.Show{}, false, ctx.Err()
+	}
+	if searchErr != nil && !isTVmaze(searchErr) {
+		return store.Show{}, false, searchErr
 	}
 	var show store.Show
 	created := true
@@ -468,19 +494,44 @@ func (s *Service) showFor(ctx context.Context, name, key string, year *int) (sto
 			return store.Show{}, false, err
 		}
 	default:
-		if show, err = s.createUnmatched(ctx, name, key, year, searchErr); err != nil {
+		if show, err = s.createUnmatched(ctx, q.name, q.key, q.year, searchErr); err != nil {
 			return store.Show{}, false, err
 		}
 	}
-	if _, err := s.store.PutShowAlias(ctx, key, show.ID, store.AliasAuto); err != nil {
+	if _, err := s.store.PutShowAlias(ctx, q.key, show.ID, store.AliasAuto); err != nil {
 		return store.Show{}, false, err
 	}
 	return show, created, nil
 }
 
+// upgrade lets a later arrival match a flagged unmatched show its auto
+// alias points at, so arrival order no longer decides (ruling B7). It
+// returns the show the arrival joins: show itself, or the local show
+// already holding the match, which show merges into.
+func (s *Service) upgrade(ctx context.Context, show store.Show, q showQuery) (store.Show, error) {
+	m, err := s.match(ctx, q)
+	if ctx.Err() != nil {
+		return store.Show{}, ctx.Err()
+	}
+	if err != nil && !isTVmaze(err) {
+		return store.Show{}, err
+	}
+	if err != nil || !m.confident {
+		return show, nil
+	}
+	s.log.Info("classify: unmatched show matched by a later arrival", "show_id", show.ID, "tvmaze_id", m.result.ID)
+	adopted, err := s.adopt(ctx, show, m.result)
+	if err == nil || !isTVmaze(err) {
+		return adopted, err
+	}
+	s.log.Warn("classify: TVmaze show fetch failed, refreshing later", "show_id", adopted.ID, "error", err)
+	s.scheduleRefresh(ctx, adopted.ID, s.now().Add(UnreachableRetry))
+	return adopted, nil
+}
+
 func (s *Service) createMatched(ctx context.Context, r tvmaze.Result) (store.Show, error) {
 	id := int64(r.ID)
-	show, err := s.store.CreateShow(ctx, store.NewShow{Title: r.Name, Year: yearPtr(r.Year), TVmazeID: &id})
+	show, err := s.store.CreateShow(ctx, store.NewShow{Title: r.Name, Year: yearPtr(r.Year), Network: nonEmpty(r.Network), TVmazeID: &id})
 	if err != nil {
 		return store.Show{}, err
 	}
