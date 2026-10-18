@@ -106,15 +106,18 @@ func run() error {
 		Log:             logger,
 	})
 
+	// One TVmaze client process-wide: its throttle must see every request.
+	tvmazeClient := tvmaze.New(tvmaze.Options{
+		BaseURL:   cfg.TVmaze.BaseURL,
+		UserAgent: "media-server/" + version,
+	})
+	sol := &semantic.Classifier{}
 	classifier := classify.New(classify.Options{
-		Store: st,
-		Bus:   bus,
-		Log:   logger,
-		TVmaze: tvmaze.New(tvmaze.Options{
-			BaseURL:   cfg.TVmaze.BaseURL,
-			UserAgent: "media-server/" + version,
-		}),
-		Sol:    &semantic.Classifier{},
+		Store:  st,
+		Bus:    bus,
+		Log:    logger,
+		TVmaze: tvmazeClient,
+		Sol:    sol,
 		ArtDir: cfg.ArtDir(),
 	})
 	if err := classifier.MarkLegacyCutoff(ctx); err != nil {
@@ -160,6 +163,8 @@ func run() error {
 		Log:           logger,
 		Jobs:          jobManager,
 		Classifier:    classifier,
+		TVmaze:        tvmazeClient,
+		Semantic:      sol,
 		RootLifecycle: watchManager,
 		Version:       version,
 		WebFS:         webdist.FS(),

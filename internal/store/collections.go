@@ -215,79 +215,159 @@ func (s *Store) RemoveItemFromCollection(ctx context.Context, collectionID, item
 	return requireRow(res)
 }
 
-func (s *Store) RemoveShowFromCollection(ctx context.Context, collectionID, showID int64) error {
-	res, err := s.db.ExecContext(ctx,
-		`DELETE FROM collection_items WHERE collection_id = ? AND show_id = ?`,
-		collectionID, showID)
+// RemoveShowFromCollection takes the show out of the collection: its own
+// row and the rows of its episodes, since either makes it a member (ruling
+// B3). It returns the episode items whose rows went.
+func (s *Store) RemoveShowFromCollection(ctx context.Context, collectionID, showID int64) ([]int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return requireRow(res)
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `
+		SELECT ci.item_id FROM collection_items ci
+		JOIN media_items mi ON mi.id = ci.item_id
+		WHERE ci.collection_id = ? AND mi.show_id = ?
+		ORDER BY ci.item_id`, collectionID, showID)
+	if err != nil {
+		return nil, err
+	}
+	episodes, err := collectIDs(rows)
+	if err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, `
+		DELETE FROM collection_items
+		WHERE collection_id = ? AND (show_id = ? OR item_id IN (
+			SELECT id FROM media_items WHERE show_id = ?))`,
+		collectionID, showID, showID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireRow(res); err != nil {
+		return nil, err
+	}
+	return episodes, tx.Commit()
 }
 
-// ReorderCollection rewrites the shared sort order; members must list every
-// current item and show exactly once.
+// ReorderCollection rewrites the shared sort order. Members must cover every
+// row exactly once: an item member covers its own row, and a show member
+// covers the show's row and the rows of its live episodes, which then sort
+// together (show row first, then episode order). Naming a show and one of
+// its live episodes is invalid.
 func (s *Store) ReorderCollection(ctx context.Context, collectionID int64, members []CollectionRef) error {
 	if _, err := s.GetCollection(ctx, collectionID); err != nil {
 		return err
 	}
-	current, err := s.collectionRefs(ctx, collectionID)
+	rows, err := s.collectionRows(ctx, collectionID)
 	if err != nil {
 		return err
 	}
-	if !sameRefSet(current, members) {
-		return fmt.Errorf("members must match current collection members: %w", ErrInvalidInput)
+	order, err := orderRows(rows, members)
+	if err != nil {
+		return err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for i, m := range members {
+	for i, row := range order {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE collection_items SET sort_order = ?
 			WHERE collection_id = ? AND (item_id = ? OR show_id = ?)`,
-			i+1, collectionID, m.ItemID, m.ShowID); err != nil {
+			i+1, collectionID, row.ItemID, row.ShowID); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
 
-func (s *Store) collectionRefs(ctx context.Context, collectionID int64) ([]CollectionRef, error) {
+// collectionRow is one collection_items row; liveShow is the show of a live
+// episode row, 0 otherwise.
+type collectionRow struct {
+	CollectionRef
+	liveShow int64
+}
+
+// collectionRows lists the rows in the order a show member lays them out.
+func (s *Store) collectionRows(ctx context.Context, collectionID int64) ([]collectionRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT COALESCE(item_id, 0), COALESCE(show_id, 0)
-		FROM collection_items
-		WHERE collection_id = ?
-		ORDER BY sort_order, item_id, show_id`, collectionID)
+		SELECT COALESCE(ci.item_id, 0), COALESCE(ci.show_id, 0),
+		       CASE WHEN mi.deleted_at IS NULL THEN COALESCE(mi.show_id, 0) ELSE 0 END
+		FROM collection_items ci
+		LEFT JOIN media_items mi ON mi.id = ci.item_id
+		WHERE ci.collection_id = ?
+		ORDER BY ci.show_id IS NULL, COALESCE(mi.season, 1) = 0, COALESCE(mi.season, 1),
+		         COALESCE(mi.episode, 0), ci.item_id, ci.show_id`, collectionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var refs []CollectionRef
+	var out []collectionRow
 	for rows.Next() {
-		var r CollectionRef
-		if err := rows.Scan(&r.ItemID, &r.ShowID); err != nil {
+		var r collectionRow
+		if err := rows.Scan(&r.ItemID, &r.ShowID, &r.liveShow); err != nil {
 			return nil, err
 		}
-		refs = append(refs, r)
+		out = append(out, r)
 	}
-	return refs, rows.Err()
+	return out, rows.Err()
 }
 
-func sameRefSet(a, b []CollectionRef) bool {
-	if len(a) != len(b) {
-		return false
+func orderRows(rows []collectionRow, members []CollectionRef) ([]CollectionRef, error) {
+	invalid := func(why string) error {
+		return fmt.Errorf("members must match current collection members (%s): %w", why, ErrInvalidInput)
 	}
-	counts := make(map[CollectionRef]int, len(a))
-	for _, r := range a {
-		counts[r]++
-	}
-	for _, r := range b {
-		if !r.valid() || counts[r] == 0 {
-			return false
+	shows := map[int64]bool{}
+	for _, m := range members {
+		if !m.valid() {
+			return nil, invalid("each member names one item or one show")
 		}
-		counts[r]--
+		if m.ShowID > 0 {
+			if shows[m.ShowID] {
+				return nil, invalid("a show is listed twice")
+			}
+			shows[m.ShowID] = true
+		}
 	}
-	return true
+	byItem := map[int64]collectionRow{}
+	for _, r := range rows {
+		if r.ItemID > 0 {
+			byItem[r.ItemID] = r
+		}
+	}
+	used := map[CollectionRef]bool{}
+	order := make([]CollectionRef, 0, len(rows))
+	for _, m := range members {
+		if m.ItemID > 0 {
+			r, ok := byItem[m.ItemID]
+			switch {
+			case !ok:
+				return nil, invalid("an item is not in the collection")
+			case used[r.CollectionRef]:
+				return nil, invalid("an item is listed twice")
+			case shows[r.liveShow]:
+				return nil, invalid("an episode is listed with its show")
+			}
+			used[r.CollectionRef] = true
+			order = append(order, r.CollectionRef)
+			continue
+		}
+		covered := false
+		for _, r := range rows {
+			if r.ShowID == m.ShowID || r.liveShow == m.ShowID {
+				used[r.CollectionRef] = true
+				order = append(order, r.CollectionRef)
+				covered = true
+			}
+		}
+		if !covered {
+			return nil, invalid("a show is not in the collection")
+		}
+	}
+	if len(order) != len(rows) {
+		return nil, invalid("a member is missing")
+	}
+	return order, nil
 }

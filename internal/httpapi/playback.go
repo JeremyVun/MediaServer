@@ -32,6 +32,17 @@ type playResponse struct {
 	Qualities []qualityResponse  `json:"qualities"`
 	AudioOnly bool               `json:"audio_only"`
 	Subtitles []subtitleResponse `json:"subtitles"`
+	Markers   markersResponse    `json:"markers"`
+}
+
+type markersResponse struct {
+	Intro         *spanResponse `json:"intro,omitempty"`
+	CreditsStartS *float64      `json:"credits_start_s,omitempty"`
+}
+
+type spanResponse struct {
+	StartS float64 `json:"start_s"`
+	EndS   float64 `json:"end_s"`
 }
 
 type qualityResponse struct {
@@ -110,6 +121,12 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subtitles := subtitleResponses(file.ID, streams)
+	markers, err := s.fileMarkers(r, file)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "loading chapters failed")
+		s.log.Error("list chapters for play", "file_id", file.ID, "error", err)
+		return
+	}
 	offered := playbackpkg.OfferedRungs(media, playbackStreams)
 	qualities := qualityResponses(offered)
 	audioOnly := playbackpkg.AudioOnlyOffered(offered, playbackStreams)
@@ -122,6 +139,7 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 			Qualities: qualities,
 			AudioOnly: audioOnly,
 			Subtitles: subtitles,
+			Markers:   markers,
 		})
 		return
 	}
@@ -159,7 +177,26 @@ func (s *Server) handlePlayItem(w http.ResponseWriter, r *http.Request) {
 		Qualities: qualities,
 		AudioOnly: audioOnly,
 		Subtitles: subtitles,
+		Markers:   markers,
 	})
+}
+
+// fileMarkers derives skip-intro and credits positions from the file's
+// chapters at request time; nothing is stored.
+func (s *Server) fileMarkers(r *http.Request, file store.File) (markersResponse, error) {
+	if file.DurationS == nil {
+		return markersResponse{}, nil
+	}
+	chapters, err := s.store.ListFileChapters(r.Context(), file.ID)
+	if err != nil {
+		return markersResponse{}, err
+	}
+	m := store.DeriveMarkers(chapters, *file.DurationS)
+	resp := markersResponse{CreditsStartS: m.CreditsStartS}
+	if m.Intro != nil {
+		resp.Intro = &spanResponse{StartS: m.Intro.StartS, EndS: m.Intro.EndS}
+	}
+	return resp, nil
 }
 
 func (s *Server) handleFileStream(w http.ResponseWriter, r *http.Request) {

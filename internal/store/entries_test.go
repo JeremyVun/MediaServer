@@ -249,12 +249,45 @@ func TestCollectionsHoldShows(t *testing.T) {
 		t.Fatalf("uncollected search with show rows present = %v, %v", found, err)
 	}
 
-	if err := l.s.RemoveShowFromCollection(l.ctx, l.toWatch.ID, l.below.ID); err != nil {
+	if _, err := l.s.RemoveShowFromCollection(l.ctx, l.toWatch.ID, l.below.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.s.RemoveShowFromCollection(l.ctx, l.toWatch.ID, l.below.ID); !errors.Is(err, store.ErrNotFound) {
+	if _, err := l.s.RemoveShowFromCollection(l.ctx, l.toWatch.ID, l.below.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("removing twice: %v", err)
 	}
 	l.expect("after removing the show", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "Zodiac", "show:Andor")
 	l.invariant()
+}
+
+func TestShowMembersCoverTheirEpisodeRows(t *testing.T) {
+	l := newCatalog(t)
+	if err := l.s.AddItemToCollection(l.ctx, l.toWatch.ID, l.belowEps[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.s.ReorderCollection(l.ctx, l.toWatch.ID, []store.CollectionRef{
+		{ShowID: l.andor.ID}, {ItemID: l.andorEps[1].ID}, {ShowID: l.below.ID}, {ItemID: l.zodiac.ID},
+	}); !errors.Is(err, store.ErrInvalidInput) {
+		t.Fatalf("show listed with its episode: %v", err)
+	}
+	if err := l.s.ReorderCollection(l.ctx, l.toWatch.ID, []store.CollectionRef{
+		{ShowID: l.andor.ID}, {ItemID: l.zodiac.ID},
+	}); !errors.Is(err, store.ErrInvalidInput) {
+		t.Fatalf("reorder missing a show: %v", err)
+	}
+	if err := l.s.ReorderCollection(l.ctx, l.toWatch.ID, []store.CollectionRef{
+		{ShowID: l.andor.ID}, {ShowID: l.below.ID}, {ItemID: l.zodiac.ID},
+	}); err != nil {
+		t.Fatalf("show-level reorder: %v", err)
+	}
+	l.expect("show-level order", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "show:Andor", "show:Below", "Zodiac")
+
+	removed, err := l.s.RemoveShowFromCollection(l.ctx, l.toWatch.ID, l.below.ID)
+	if err != nil || !reflect.DeepEqual(removed, []int64{l.belowEps[0].ID}) {
+		t.Fatalf("remove Below = %v, %v", removed, err)
+	}
+	removed, err = l.s.RemoveShowFromCollection(l.ctx, l.toWatch.ID, l.andor.ID)
+	if err != nil || !reflect.DeepEqual(removed, []int64{l.andorEps[1].ID}) {
+		t.Fatalf("remove Andor (member through an episode) = %v, %v", removed, err)
+	}
+	l.expect("after removals", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "Zodiac")
 }

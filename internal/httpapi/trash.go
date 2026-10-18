@@ -61,6 +61,7 @@ func (s *Server) handleDeleteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishRemoved(item.ID)
+	s.publishShowOf(item)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -92,6 +93,7 @@ func (s *Server) handleRestoreItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishItemEvent(r, events.ItemAdded, item.ID)
+	s.publishShowOf(item)
 	writeJSON(w, http.StatusOK, map[string]any{"id": item.ID})
 }
 

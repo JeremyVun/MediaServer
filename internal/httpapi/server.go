@@ -17,6 +17,7 @@ import (
 	"github.com/JeremyVun/MediaServer/internal/jobs"
 	"github.com/JeremyVun/MediaServer/internal/playback"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 )
 
 func init() {
@@ -32,6 +33,8 @@ type Server struct {
 	log           *slog.Logger
 	jobs          *jobs.Manager
 	classifier    *classify.Service
+	tvmaze        *tvmaze.Client
+	semantic      SemanticProbe
 	rootLifecycle RootLifecycle
 	version       string
 	startedAt     time.Time
@@ -51,6 +54,8 @@ type Options struct {
 	Log           *slog.Logger
 	Jobs          *jobs.Manager
 	Classifier    *classify.Service
+	TVmaze        *tvmaze.Client // the process-wide client: its throttle is shared with classify
+	Semantic      SemanticProbe
 	RootLifecycle RootLifecycle
 	Version       string
 	WebFS         fs.FS // pass webdist.FS() output; nil serves a dev placeholder
@@ -59,6 +64,11 @@ type Options struct {
 	Subtitles     playback.SubtitleExtractor
 	UploadIgnore  ignoreSet
 	UploadMinGB   float64
+}
+
+// SemanticProbe reports whether Sol can run (*semantic.Classifier).
+type SemanticProbe interface {
+	Available() bool
 }
 
 type ignoreSet interface {
@@ -75,6 +85,8 @@ func NewServer(opts Options) *Server {
 		log:           opts.Log,
 		jobs:          opts.Jobs,
 		classifier:    opts.Classifier,
+		tvmaze:        opts.TVmaze,
+		semantic:      opts.Semantic,
 		rootLifecycle: opts.RootLifecycle,
 		version:       opts.Version,
 		startedAt:     time.Now(),
@@ -93,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/library", s.handleLibrary)
 	mux.HandleFunc("GET /api/items", s.handleListItems)
 	mux.HandleFunc("GET /api/items/{id}", s.handleGetItem)
 	mux.HandleFunc("PATCH /api/items/{id}", s.handlePatchItem)
@@ -110,6 +123,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{sid}/{rung}/{segment}", s.handleHLSSegment)
 	mux.HandleFunc("DELETE /api/sessions/{sid}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/sessions/{sid}/teardown", s.handleDeleteSession)
+	mux.HandleFunc("GET /api/shows/match-search", s.handleShowMatchSearch)
+	mux.HandleFunc("GET /api/shows/{id}", s.handleGetShow)
+	mux.HandleFunc("PATCH /api/shows/{id}", s.handlePatchShow)
+	mux.HandleFunc("POST /api/shows/{id}/match", s.handleShowMatch)
+	mux.HandleFunc("POST /api/shows/{id}/merge", s.handleShowMerge)
+	mux.HandleFunc("GET /api/shows/{id}/poster", s.handleShowPoster)
+	mux.HandleFunc("GET /api/shows/{id}/backdrop", s.handleShowBackdrop)
+	mux.HandleFunc("POST /api/shows/{id}/trash", s.handleTrashShow)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/collections", s.handleListCollections)
 	mux.HandleFunc("POST /api/collections", s.handleCreateCollection)
@@ -117,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/collections/{id}", s.handleDeleteCollection)
 	mux.HandleFunc("POST /api/collections/{id}/items", s.handleAddCollectionItem)
 	mux.HandleFunc("DELETE /api/collections/{id}/items/{itemId}", s.handleRemoveCollectionItem)
+	mux.HandleFunc("DELETE /api/collections/{id}/shows/{showId}", s.handleRemoveCollectionShow)
 	mux.HandleFunc("PUT /api/collections/{id}/order", s.handleReorderCollection)
 	mux.HandleFunc("POST /api/trash/purge", s.handlePurgeTrash)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
@@ -131,6 +153,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/jobs/{id}/trash", s.handleTrashJobFile)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings/hls-cache", s.handleSetHLSCacheDir)
+	mux.HandleFunc("PUT /api/settings/semantic-classification", s.handleSetSemanticClassification)
 	mux.HandleFunc("POST /api/uploads", s.handleCreateUpload)
 	mux.HandleFunc("GET /api/uploads/{id}", s.handleGetUpload)
 	mux.HandleFunc("PUT /api/uploads/{id}", s.handlePutUploadChunk)
