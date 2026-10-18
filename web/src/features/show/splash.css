@@ -1,0 +1,95 @@
+/* The show page's splash, ported from the round 3 exemplar
+   (docs/backlog/shows/comps/r3/workshop/synth.css). useSplashScroll sets
+   --dim (0..1, eased), --drift (px) and --top (1..0) on [data-show-page]. */
+[data-show-page] {
+  --dim: 0;
+  --drift: 0px;
+  --top: 1;
+  --dim-max: 0.8;
+  overflow-x: clip;
+}
+[data-show-page][data-scheme='light'] {
+  --dim-max: 0.86;
+}
+
+/* The art rises at 0.6x the scroll and blurs only late and lightly: up to
+   4 px once the wash passes half strength. Its lower 70 % dissolves on a
+   smoothstep curve; a 42-100 % mask measured 2.6 L* per 4 px. */
+.splash-img {
+  transform: translate3d(0, var(--drift), 0);
+  filter: blur(calc(max(0, var(--dim) - 0.5) * 8px));
+  will-change: transform, filter;
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, rgb(0 0 0 / 1) 30%, rgb(0 0 0 / 0.972) 37%, rgb(0 0 0 / 0.896) 44%, rgb(0 0 0 / 0.784) 51%, rgb(0 0 0 / 0.648) 58%, rgb(0 0 0 / 0.5) 65%, rgb(0 0 0 / 0.352) 72%, rgb(0 0 0 / 0.216) 79%, rgb(0 0 0 / 0.104) 86%, rgb(0 0 0 / 0.028) 93%, rgb(0 0 0 / 0) 100%);
+  mask-image: linear-gradient(to bottom, black 0%, rgb(0 0 0 / 1) 30%, rgb(0 0 0 / 0.972) 37%, rgb(0 0 0 / 0.896) 44%, rgb(0 0 0 / 0.784) 51%, rgb(0 0 0 / 0.648) 58%, rgb(0 0 0 / 0.5) 65%, rgb(0 0 0 / 0.352) 72%, rgb(0 0 0 / 0.216) 79%, rgb(0 0 0 / 0.104) 86%, rgb(0 0 0 / 0.028) 93%, rgb(0 0 0 / 0) 100%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash-img {
+    transform: none;
+  }
+}
+
+/* One full-bleed wash: no surface ends at a column edge. */
+.splash-dim {
+  background: var(--color-bg-canvas);
+  opacity: calc(var(--dim) * var(--dim-max));
+}
+
+/* The back link's scrim: 28 % at most, smoothstep over 144 px (a 50 %
+   two-stop ramp measured 2.5 L* per 4 px). */
+.splash-top {
+  background: linear-gradient(to bottom, rgb(0 0 0 / 0.28) 0%, rgb(0 0 0 / 0.268) 12.5%, rgb(0 0 0 / 0.236) 25%, rgb(0 0 0 / 0.191) 37.5%, rgb(0 0 0 / 0.14) 50%, rgb(0 0 0 / 0.089) 62.5%, rgb(0 0 0 / 0.044) 75%, rgb(0 0 0 / 0.012) 87.5%, rgb(0 0 0 / 0) 100%);
+  opacity: var(--top);
+}
+
+/* A soft shade travels with the title block, full-bleed and long-faded, so
+   a baked-in logo sits under the canvas while the title crosses it. A
+   240 px ramp measured 5.2 L* per 16 px; this one is 432 px. */
+[data-hero] {
+  position: relative;
+  isolation: isolate;
+}
+[data-show-page][data-art] [data-hero]::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -480px;
+  bottom: -140px;
+  left: -100vw;
+  right: -100vw;
+  pointer-events: none;
+  opacity: 0.85;
+  background: linear-gradient(to bottom,
+      color-mix(in srgb, var(--color-bg-canvas) 0%, transparent) 0px,
+      color-mix(in srgb, var(--color-bg-canvas) 1.7%, transparent) 36px,
+      color-mix(in srgb, var(--color-bg-canvas) 6.4%, transparent) 72px,
+      color-mix(in srgb, var(--color-bg-canvas) 13.4%, transparent) 108px,
+      color-mix(in srgb, var(--color-bg-canvas) 22.3%, transparent) 144px,
+      color-mix(in srgb, var(--color-bg-canvas) 32.3%, transparent) 180px,
+      color-mix(in srgb, var(--color-bg-canvas) 43%, transparent) 216px,
+      color-mix(in srgb, var(--color-bg-canvas) 53.7%, transparent) 252px,
+      color-mix(in srgb, var(--color-bg-canvas) 63.7%, transparent) 288px,
+      color-mix(in srgb, var(--color-bg-canvas) 72.6%, transparent) 324px,
+      color-mix(in srgb, var(--color-bg-canvas) 79.6%, transparent) 360px,
+      color-mix(in srgb, var(--color-bg-canvas) 84.3%, transparent) 396px,
+      color-mix(in srgb, var(--color-bg-canvas) 86%, transparent) 432px,
+      color-mix(in srgb, var(--color-bg-canvas) 86%, transparent) calc(100% - 140px),
+      color-mix(in srgb, var(--color-bg-canvas) 83.6%, transparent) calc(100% - 126px),
+      color-mix(in srgb, var(--color-bg-canvas) 77.1%, transparent) calc(100% - 112px),
+      color-mix(in srgb, var(--color-bg-canvas) 67.4%, transparent) calc(100% - 98px),
+      color-mix(in srgb, var(--color-bg-canvas) 55.7%, transparent) calc(100% - 84px),
+      color-mix(in srgb, var(--color-bg-canvas) 43%, transparent) calc(100% - 70px),
+      color-mix(in srgb, var(--color-bg-canvas) 30.3%, transparent) calc(100% - 56px),
+      color-mix(in srgb, var(--color-bg-canvas) 18.6%, transparent) calc(100% - 42px),
+      color-mix(in srgb, var(--color-bg-canvas) 8.9%, transparent) calc(100% - 28px),
+      color-mix(in srgb, var(--color-bg-canvas) 2.4%, transparent) calc(100% - 14px),
+      color-mix(in srgb, var(--color-bg-canvas) 0%, transparent) 100%);
+}
+
+/* Desktop: the shade is absent at rest (stacked on the art's dissolve it
+   measured 5.1 L* per 16 px) and full by a quarter of the wash, before the
+   title reaches the art's credits. */
+@media (min-width: 640px) {
+  [data-show-page][data-art] [data-hero]::before {
+    opacity: min(1, calc(var(--dim) * 4));
+  }
+}

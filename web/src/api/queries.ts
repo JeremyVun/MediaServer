@@ -527,3 +527,15 @@ function invalidateItemCaches(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ['collections'] })
   invalidateShowCaches(queryClient)
 }
+
+/** Every show, by title, for the Merge and Move-to-show pickers. Kept out of
+    ['library'], whose SSE patches assume the grid's infinite pages. */
+export function useShowList(enabled = true) {
+  return useQuery({
+    queryKey: ['show-picker'],
+    staleTime: 0,
+    queryFn: () => api<LibraryList>('/api/library?type=show&sort=title&order=asc&limit=500'),
+    select: (list) => list.entries.flatMap((entry) => (entry.kind === 'show' ? [entry] : [])),
+    enabled,
+  })
+}
