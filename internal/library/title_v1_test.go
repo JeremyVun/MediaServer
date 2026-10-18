@@ -2,7 +2,7 @@ package library
 
 import "testing"
 
-func TestParseTitle(t *testing.T) {
+func TestParseTitleV1(t *testing.T) {
 	tests := []struct {
 		name        string
 		wantTitle   string
@@ -59,7 +59,7 @@ func TestParseTitle(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := ParseTitle(tt.name)
+		got := parseTitleV1(tt.name)
 		if got.Title != tt.wantTitle {
 			t.Errorf("%s title = %q, want %q", tt.name, got.Title, tt.wantTitle)
 		}

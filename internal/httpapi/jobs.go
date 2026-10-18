@@ -191,9 +191,13 @@ func (s *Server) catalogUnprobedFile(w http.ResponseWriter, r *http.Request, roo
 		s.log.Error("fingerprint unprobed file", "path", path, "error", err)
 		return store.Item{}, false
 	}
-	parsed := library.ParseTitle(relPath)
+	parsed := library.ParsePath(relPath)
+	itemType := "video"
+	if parsed.Kind == library.KindEpisode {
+		itemType = "episode"
+	}
 	item, _, err := s.store.CreateItemWithFile(ctx, store.NewItem{
-		Type:  parsed.Type,
+		Type:  itemType,
 		Title: parsed.Title,
 		Year:  parsed.Year,
 	}, store.NewFile{

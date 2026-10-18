@@ -66,7 +66,7 @@ func TestTrashJobFileMovesUnprobedDownloadToTrash(t *testing.T) {
 		t.Fatalf("trash file: %v", err)
 	}
 	item, err := st.GetItem(ctx, res.ItemID)
-	if err != nil || item.DeletedAt == nil || item.Title != "Dead Show" {
+	if err != nil || item.DeletedAt == nil || item.Type != "episode" || item.Title != "Episode 1" {
 		t.Fatalf("item=%+v err=%v, want trashed with parsed title", item, err)
 	}
 	if _, err := st.GetJob(ctx, job.ID); !errors.Is(err, store.ErrNotFound) {

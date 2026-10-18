@@ -461,9 +461,13 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 	var item store.Item
 	var file store.File
 	if newFile {
-		parsed := library.ParseTitle(relPath)
+		parsed := library.ParsePath(relPath)
+		itemType := "video"
+		if parsed.Kind == library.KindEpisode {
+			itemType = "episode"
+		}
 		item, file, err = m.store.CreateItemWithFile(ctx, store.NewItem{
-			Type:  parsed.Type,
+			Type:  itemType,
 			Title: parsed.Title,
 			Year:  parsed.Year,
 		}, store.NewFile{
