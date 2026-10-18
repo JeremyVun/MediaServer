@@ -92,7 +92,7 @@ func (s *Store) DetachRoot(ctx context.Context, id int64) error {
 	if err := requireRow(res); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE media_files SET status = 'offline' WHERE root_id = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE media_files SET status = 'offline' WHERE root_id = ? AND status <> 'trashed'`, id); err != nil {
 		return err
 	}
 	return tx.Commit()

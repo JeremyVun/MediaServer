@@ -33,6 +33,7 @@ const (
 type Enqueuer interface {
 	EnqueueReconcile(ctx context.Context, rootID int64) (store.Job, error)
 	EnqueueProbe(ctx context.Context, rootID int64, relPath string) (store.Job, error)
+	EnqueueTrashMissing(ctx context.Context) (store.Job, error)
 }
 
 type Manager struct {
@@ -376,6 +377,15 @@ func (m *Manager) enqueueProbe(ctx context.Context, rootID int64, relPath string
 	}
 }
 
+func (m *Manager) enqueueTrashMissing(ctx context.Context) {
+	if m.jobs == nil {
+		return
+	}
+	if _, err := m.jobs.EnqueueTrashMissing(ctx); err != nil && ctx.Err() == nil {
+		m.log.Error("enqueue trash missing", "error", err)
+	}
+}
+
 func (m *Manager) publish(event events.Event) {
 	if m.bus != nil {
 		m.bus.Publish(event)
@@ -611,7 +621,9 @@ func (rw *rootWatcher) handleRemoved(ctx context.Context, rel, path string) {
 		return
 	case <-timer.C:
 	}
-	if _, err := os.Stat(path); err == nil {
+	// Only a definite "no such file" is a removal; a permission or I/O error
+	// (TCC revoking access) must never read as one.
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	file, err := rw.manager.store.GetFileByLocation(ctx, rw.root.ID, rel)
@@ -629,6 +641,7 @@ func (rw *rootWatcher) handleRemoved(ctx context.Context, rel, path string) {
 		return
 	}
 	rw.manager.publishItemUpdated(ctx, file.ItemID)
+	rw.manager.enqueueTrashMissing(ctx)
 }
 
 func relPath(rootPath, path string) (string, error) {

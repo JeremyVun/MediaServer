@@ -36,6 +36,9 @@ const (
 	// TypeMovieRefresh matches one movie on TMDB, or fills a matched one's
 	// summary and backdrop.
 	TypeMovieRefresh = "movie_refresh"
+	// TypeTrashMissing moves to Trash the items whose files were deleted
+	// from a connected drive (ruling B16).
+	TypeTrashMissing = "trash_missing"
 
 	maxAttempts = 3
 
@@ -70,6 +73,7 @@ type Manager struct {
 	workers int
 	nudge   chan struct{}
 	wg      sync.WaitGroup
+	now     func() time.Time
 
 	// reconcileMu serializes reconcile execution per root: the mount monitor
 	// and /Volumes watcher can both enqueue for the same root, and with two
@@ -125,6 +129,8 @@ type MovieRefreshPayload struct {
 	ItemID int64 `json:"item_id"`
 }
 
+type TrashMissingPayload struct{}
+
 func NewManager(opts Options) *Manager {
 	workers := opts.Workers
 	if workers <= 0 {
@@ -150,6 +156,7 @@ func NewManager(opts Options) *Manager {
 		airingRefreshInterval: opts.AiringRefreshInterval,
 		workers:               workers,
 		nudge:                 make(chan struct{}, 1),
+		now:                   time.Now,
 		reconcileLocks:        make(map[int64]*sync.Mutex),
 	}
 }
@@ -211,6 +218,12 @@ func (m *Manager) EnqueueShowRefresh(ctx context.Context, showID int64, runAt ti
 func (m *Manager) EnqueueMovieRefresh(ctx context.Context, itemID int64, runAt time.Time) error {
 	_, err := m.enqueueAt(ctx, TypeMovieRefresh, MovieRefreshPayload{ItemID: itemID}, runAt)
 	return err
+}
+
+// EnqueueTrashMissing queues the missing-file sweep to run now; it
+// reschedules itself for the next grace that runs out.
+func (m *Manager) EnqueueTrashMissing(ctx context.Context) (store.Job, error) {
+	return m.enqueue(ctx, TypeTrashMissing, TrashMissingPayload{})
 }
 
 // EnqueueBackfill runs at boot: classify every live item still unclassified
@@ -425,6 +438,8 @@ func (m *Manager) handleJob(ctx context.Context, job store.Job) error {
 			return Permanent(fmt.Errorf("decode movie refresh payload: %w", err))
 		}
 		return m.handleMovieRefresh(ctx, payload.ItemID)
+	case TypeTrashMissing:
+		return m.handleTrashMissing(ctx)
 	default:
 		return Permanent(fmt.Errorf("unknown job type %q", job.Type))
 	}
@@ -559,8 +574,13 @@ func (m *Manager) handleReconcile(ctx context.Context, rootID int64) error {
 	if err != nil {
 		return err
 	}
+	missing := 0
 	for _, file := range files {
 		if file.Status == "trashed" || seen[file.RelPath] {
+			continue
+		}
+		missing++
+		if file.Status == "missing" {
 			continue
 		}
 		if err := m.store.SetFileStatus(ctx, file.ID, "missing"); err != nil {
@@ -571,6 +591,11 @@ func (m *Manager) handleReconcile(ctx context.Context, rootID int64) error {
 			"status":  "missing",
 		}})
 		m.publishItemSummary(ctx, file.ItemID)
+	}
+	if missing > 0 {
+		if _, err := m.EnqueueTrashMissing(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
 }

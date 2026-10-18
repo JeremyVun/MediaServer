@@ -394,6 +394,13 @@ func (s *Store) MarkItemRestored(ctx context.Context, id int64) error {
 		WHERE item_id = ? AND status = 'trashed'`, id); err != nil {
 		return err
 	}
+	// An auto-trashed item (ruling B16) comes back with its files still
+	// missing; a fresh grace gives the owner time to put them back.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE media_files SET missing_since = datetime('now')
+		WHERE item_id = ? AND status = 'missing'`, id); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
