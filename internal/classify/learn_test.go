@@ -245,6 +245,9 @@ func TestEditItemFields(t *testing.T) {
 	if _, err := h.svc.EditItem(h.ctx, andor.ID, ItemEdit{Episode: ptr(0)}); !errors.Is(err, store.ErrInvalidInput) {
 		t.Fatalf("episode 0 = %v", err)
 	}
+	if a := h.alias("andor"); a != keys {
+		t.Fatalf("field edits changed the alias: %+v, was %+v", a, keys)
+	}
 
 	fakeArt(t, h, show)
 	h.drain()
