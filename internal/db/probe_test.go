@@ -91,8 +91,10 @@ func TestProbe_Migration_RebootsKeepShowsData(t *testing.T) {
 		if err := Migrate(sqldb); err != nil {
 			t.Fatalf("boot %d: %v", boot, err)
 		}
-		if v, err := Version(sqldb); err != nil || v != 9 {
-			t.Fatalf("boot %d: version %d (%v), want 9", boot, v, err)
+		names, _ := migrationNames()
+		want, _ := migrationVersion(names[len(names)-1])
+		if v, err := Version(sqldb); err != nil || v != want {
+			t.Fatalf("boot %d: version %d (%v), want %d", boot, v, err, want)
 		}
 		for name, q := range showsQueries {
 			if got := dumpRows(t, sqldb, q); !reflect.DeepEqual(got, before[name]) {
