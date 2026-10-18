@@ -75,6 +75,7 @@ export function SeekBar({
   // keyboard/ARIA slider semantics are unchanged.
   return (
     <div
+      data-seek
       className="relative mb-3 h-6"
       onPointerMove={(e) => {
         if (coarsePointer || !duration) return

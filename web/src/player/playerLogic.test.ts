@@ -5,6 +5,7 @@ import {
   hoverTime,
   isDoubleTap,
   mouseClickDecision,
+  playerTitles,
   pointerRoute,
   seekDirection,
   touchTapAction,
@@ -127,5 +128,32 @@ describe('hoverTime', () => {
   ]
   it.each(cases)('%s', (_name, clientX, rectLeft, rectWidth, duration, expected) => {
     expect(hoverTime(clientX, rectLeft, rectWidth, duration)).toBe(expected)
+  })
+})
+
+describe('playerTitles', () => {
+  const base = { title: 'Pick a Sticker', show: null, season: null, episode: null, episode_end: null }
+  const furious = { id: 7, title: 'Furious' }
+  const cases: Array<[string, Parameters<typeof playerTitles>[0], ReturnType<typeof playerTitles>]> = [
+    ['a movie keeps its title', { ...base, title: 'Dune' }, { heading: 'Dune', mediaTitle: 'Dune' }],
+    [
+      'an episode names the show and episode',
+      { ...base, show: furious, season: 1, episode: 5 },
+      { heading: 'Furious · S1 E5 · Pick a Sticker', mediaTitle: 'S1 E5 · Pick a Sticker', mediaArtist: 'Furious' },
+    ],
+    [
+      'a two-episode file',
+      { ...base, show: furious, season: 1, episode: 5, episode_end: 6 },
+      { heading: 'Furious · S1 E5–6 · Pick a Sticker', mediaTitle: 'S1 E5–6 · Pick a Sticker', mediaArtist: 'Furious' },
+    ],
+    [
+      'a special',
+      { ...base, show: furious, season: 0, episode: 2 },
+      { heading: 'Furious · Special 2 · Pick a Sticker', mediaTitle: 'Special 2 · Pick a Sticker', mediaArtist: 'Furious' },
+    ],
+    ['an episode not yet filed under a show', { ...base, season: 1, episode: 5 }, { heading: 'Pick a Sticker', mediaTitle: 'Pick a Sticker' }],
+  ]
+  it.each(cases)('%s', (_name, item, expected) => {
+    expect(playerTitles(item)).toEqual(expected)
   })
 })

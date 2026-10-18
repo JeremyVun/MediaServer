@@ -17,6 +17,16 @@ describe('mediaSessionMetadata', () => {
     expect(metadata.artwork?.map((image) => image.src) ?? []).toEqual(artwork)
   })
 
+  it('names the show as the artist for an episode', () => {
+    const metadata = mediaSessionMetadata('S1 E5 · Pick a Sticker', '/api/items/7/thumb?v=3', ORIGIN, 'Furious')
+    expect(metadata.title).toBe('S1 E5 · Pick a Sticker')
+    expect(metadata.artist).toBe('Furious')
+  })
+
+  it('leaves the artist out for a movie', () => {
+    expect(mediaSessionMetadata('Dune', '', ORIGIN)).not.toHaveProperty('artist')
+  })
+
   it('types the artwork as jpeg', () => {
     const metadata = mediaSessionMetadata('Dune', '/api/items/7/thumb?v=3', ORIGIN)
     expect(metadata.artwork).toEqual([{ src: `${ORIGIN}/api/items/7/thumb?v=3`, type: 'image/jpeg' }])

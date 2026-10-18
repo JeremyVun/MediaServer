@@ -2,6 +2,9 @@
 // seek clamping. Kept free of React/DOM so it can be table-tested (see
 // playerLogic.test.ts). Player.tsx wires these to real events and refs.
 
+import type { ItemDetail } from '../api/types.ts'
+import { formatEpisodeLabel } from '../lib/format.ts'
+
 export type PointerRoute = 'mouse' | 'touch'
 
 // Mouse gets desktop conventions (click = play/pause, double-click =
@@ -87,4 +90,20 @@ export function hoverTime(clientX: number, rectLeft: number, rectWidth: number, 
   if (rectWidth <= 0 || !Number.isFinite(duration) || duration <= 0) return 0
   const fraction = Math.max(0, Math.min(1, (clientX - rectLeft) / rectWidth))
   return fraction * duration
+}
+
+export interface PlayerTitles {
+  /** The top bar's label. */
+  heading: string
+  mediaTitle: string
+  mediaArtist?: string
+}
+
+/** Episodes name the show and the episode; everything else its own title. */
+export function playerTitles(item: Pick<ItemDetail, 'title' | 'show' | 'season' | 'episode' | 'episode_end'>): PlayerTitles {
+  if (item.show == null || item.season == null || item.episode == null) {
+    return { heading: item.title, mediaTitle: item.title }
+  }
+  const episode = `${formatEpisodeLabel(item.season, item.episode, item.episode_end)} · ${item.title}`
+  return { heading: `${item.show.title} · ${episode}`, mediaTitle: episode, mediaArtist: item.show.title }
 }
