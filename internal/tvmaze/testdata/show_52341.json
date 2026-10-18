@@ -1,0 +1,15 @@
+{
+ "id": 52341,
+ "name": "Andor",
+ "premiered": "2022-09-21",
+ "network": null,
+ "webChannel": {
+  "id": 287,
+  "name": "Disney+"
+ },
+ "image": {
+  "medium": "https://static.tvmaze.com/uploads/images/medium_portrait/564/1411766.jpg",
+  "original": "https://static.tvmaze.com/uploads/images/original_untouched/564/1411766.jpg"
+ },
+ "summary": "<p><b>Andor</b> explores a new perspective from the Star Wars galaxy, focusing on Cassian Andor's journey to discover the difference he can make. The series brings forward the tale of the burgeoning rebellion against the Empire and how people and planets became involved. It's an era filled with danger, deception and intrigue where Cassian will embark on the path that is destined to turn him into a rebel hero.</p>"
+}

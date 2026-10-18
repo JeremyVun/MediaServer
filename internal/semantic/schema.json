@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "show_title", "season", "episode", "episode_end", "episode_title", "title", "year", "confident"],
+  "properties": {
+    "kind": {"type": "string", "enum": ["movie", "episode", "video"]},
+    "show_title": {"type": ["string", "null"]},
+    "season": {"type": ["integer", "null"]},
+    "episode": {"type": ["integer", "null"]},
+    "episode_end": {"type": ["integer", "null"]},
+    "episode_title": {"type": ["string", "null"]},
+    "title": {"type": ["string", "null"]},
+    "year": {"type": ["integer", "null"]},
+    "confident": {"type": "boolean"}
+  }
+}

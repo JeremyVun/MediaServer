@@ -1,0 +1,164 @@
+[
+ {
+  "id": 32178,
+  "name": "A Study in Pink",
+  "season": 1,
+  "number": 1,
+  "type": "regular",
+  "airdate": "2010-07-25",
+  "runtime": 90
+ },
+ {
+  "id": 32179,
+  "name": "The Blind Banker",
+  "season": 1,
+  "number": 2,
+  "type": "regular",
+  "airdate": "2010-08-01",
+  "runtime": 90
+ },
+ {
+  "id": 32180,
+  "name": "The Great Game",
+  "season": 1,
+  "number": 3,
+  "type": "regular",
+  "airdate": "2010-08-08",
+  "runtime": 90
+ },
+ {
+  "id": 32181,
+  "name": "A Scandal in Belgravia",
+  "season": 2,
+  "number": 1,
+  "type": "regular",
+  "airdate": "2012-01-01",
+  "runtime": 90
+ },
+ {
+  "id": 32182,
+  "name": "The Hounds of Baskerville",
+  "season": 2,
+  "number": 2,
+  "type": "regular",
+  "airdate": "2012-01-08",
+  "runtime": 90
+ },
+ {
+  "id": 32183,
+  "name": "The Reichenbach Fall",
+  "season": 2,
+  "number": 3,
+  "type": "regular",
+  "airdate": "2012-01-15",
+  "runtime": 90
+ },
+ {
+  "id": 32184,
+  "name": "The Empty Hearse",
+  "season": 3,
+  "number": 1,
+  "type": "regular",
+  "airdate": "2014-01-01",
+  "runtime": 90
+ },
+ {
+  "id": 32185,
+  "name": "The Sign of Three",
+  "season": 3,
+  "number": 2,
+  "type": "regular",
+  "airdate": "2014-01-05",
+  "runtime": 90
+ },
+ {
+  "id": 32186,
+  "name": "His Last Vow",
+  "season": 3,
+  "number": 3,
+  "type": "regular",
+  "airdate": "2014-01-12",
+  "runtime": 90
+ },
+ {
+  "id": 401163,
+  "name": "The Abominable Bride",
+  "season": 4,
+  "number": null,
+  "type": "significant_special",
+  "airdate": "2016-01-01",
+  "runtime": 93
+ },
+ {
+  "id": 941297,
+  "name": "The Six Thatchers",
+  "season": 4,
+  "number": 1,
+  "type": "regular",
+  "airdate": "2017-01-01",
+  "runtime": 90
+ },
+ {
+  "id": 941298,
+  "name": "The Lying Detective",
+  "season": 4,
+  "number": 2,
+  "type": "regular",
+  "airdate": "2017-01-08",
+  "runtime": 90
+ },
+ {
+  "id": 1004191,
+  "name": "The Final Problem",
+  "season": 4,
+  "number": 3,
+  "type": "regular",
+  "airdate": "2017-01-15",
+  "runtime": 90
+ },
+ {
+  "id": 839178,
+  "name": "Unaired Pilot",
+  "season": 1,
+  "number": null,
+  "type": "insignificant_special",
+  "airdate": "2010-08-30",
+  "runtime": 55
+ },
+ {
+  "id": 1785540,
+  "name": "Unlocking Sherlock",
+  "season": 1,
+  "number": null,
+  "type": "insignificant_special",
+  "airdate": "2010-08-30",
+  "runtime": 32
+ },
+ {
+  "id": 839479,
+  "name": "Sherlock Uncovered",
+  "season": 2,
+  "number": null,
+  "type": "insignificant_special",
+  "airdate": "2012-01-23",
+  "runtime": 20
+ },
+ {
+  "id": 32189,
+  "name": "Many Happy Returns",
+  "season": 3,
+  "number": null,
+  "type": "insignificant_special",
+  "airdate": "2013-12-24",
+  "runtime": 7
+ },
+ {
+  "id": 1785539,
+  "name": "Unlocking Sherlock (2013)",
+  "season": 3,
+  "number": null,
+  "type": "insignificant_special",
+  "airdate": "2013-12-25",
+  "runtime": 60
+ }
+]
