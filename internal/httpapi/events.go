@@ -95,10 +95,10 @@ func (s *Server) ssePayload(event events.Event) (any, error) {
 		default:
 			return nil, fmt.Errorf("unexpected item payload %T", event.Payload)
 		}
-	case events.ItemRemoved:
+	case events.ItemRemoved, events.ShowAdded, events.ShowUpdated, events.ShowRemoved:
 		id, ok := eventPayloadInt(event.Payload, "id")
 		if !ok {
-			return nil, fmt.Errorf("unexpected item.removed payload %T", event.Payload)
+			return nil, fmt.Errorf("unexpected %s payload %T", event.Type, event.Payload)
 		}
 		return map[string]int64{"id": id}, nil
 	case events.RootStatus:

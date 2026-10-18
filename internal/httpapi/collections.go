@@ -21,12 +21,19 @@ type collectionNameRequest struct {
 	Name string `json:"name"`
 }
 
-type addCollectionItemRequest struct {
+// collectionMember names exactly one item or one show.
+type collectionMember struct {
 	ItemID int64 `json:"item_id"`
+	ShowID int64 `json:"show_id"`
 }
 
+func (m collectionMember) valid() bool { return (m.ItemID > 0) != (m.ShowID > 0) }
+
+// reorderCollectionRequest takes entries in grid order, or the legacy
+// item-only item_ids; exactly one of the two.
 type reorderCollectionRequest struct {
-	ItemIDs []int64 `json:"item_ids"`
+	ItemIDs *[]int64            `json:"item_ids"`
+	Entries *[]collectionMember `json:"entries"`
 }
 
 func (s *Server) handleListCollections(w http.ResponseWriter, r *http.Request) {
@@ -90,18 +97,27 @@ func (s *Server) handleAddCollectionItem(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	var req addCollectionItemRequest
+	var req collectionMember
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || req.ItemID <= 0 {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid collection item")
+	if err := dec.Decode(&req); err != nil || !req.valid() {
+		writeError(w, http.StatusBadRequest, "bad_request", "invalid collection member: give item_id or show_id")
+		return
+	}
+	if req.ShowID > 0 {
+		if err := s.store.AddShowToCollection(r.Context(), id, req.ShowID); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		s.publishShow(events.ShowUpdated, req.ShowID)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if err := s.store.AddItemToCollection(r.Context(), id, req.ItemID); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.publishItemEvent(r, events.ItemUpdated, req.ItemID)
+	s.publishItemChange(r, req.ItemID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -118,7 +134,30 @@ func (s *Server) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Reque
 		writeStoreError(w, err)
 		return
 	}
-	s.publishItemEvent(r, events.ItemUpdated, itemID)
+	s.publishItemChange(r, itemID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRemoveCollectionShow removes the show and its episodes from the
+// collection (ruling B3), since either one keeps the show a member.
+func (s *Server) handleRemoveCollectionShow(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	showID, ok := pathID(w, r, "showId")
+	if !ok {
+		return
+	}
+	episodes, err := s.store.RemoveShowFromCollection(r.Context(), id, showID)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	for _, itemID := range episodes {
+		s.publishItemEvent(r, events.ItemUpdated, itemID)
+	}
+	s.publishShow(events.ShowUpdated, showID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -128,21 +167,41 @@ func (s *Server) handleReorderCollection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req reorderCollectionRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid collection order")
+	if !decodeStrict(w, r, &req, "invalid collection order") {
 		return
 	}
-	members := make([]store.CollectionRef, len(req.ItemIDs))
-	for i, itemID := range req.ItemIDs {
-		members[i] = store.CollectionRef{ItemID: itemID}
+	if (req.ItemIDs == nil) == (req.Entries == nil) {
+		writeError(w, http.StatusBadRequest, "bad_request", "give either entries or item_ids")
+		return
+	}
+	var members []store.CollectionRef
+	if req.ItemIDs != nil {
+		for _, itemID := range *req.ItemIDs {
+			members = append(members, store.CollectionRef{ItemID: itemID})
+		}
+	} else {
+		for _, m := range *req.Entries {
+			if !m.valid() {
+				writeError(w, http.StatusBadRequest, "bad_request", "each entry names one item_id or one show_id")
+				return
+			}
+			members = append(members, store.CollectionRef{ItemID: m.ItemID, ShowID: m.ShowID})
+		}
 	}
 	if err := s.store.ReorderCollection(r.Context(), id, members); err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// publishItemChange sends item.updated, and show.updated for an episode,
+// whose show's collection_ids follow its episodes (ruling B3).
+func (s *Server) publishItemChange(r *http.Request, itemID int64) {
+	s.publishItemEvent(r, events.ItemUpdated, itemID)
+	if item, err := s.store.GetItem(r.Context(), itemID); err == nil {
+		s.publishShowOf(item)
+	}
 }
 
 func decodeCollectionName(w http.ResponseWriter, r *http.Request, req *collectionNameRequest) bool {

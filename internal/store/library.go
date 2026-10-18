@@ -365,6 +365,22 @@ func (s *Store) loadSummaryFileIDs(ctx context.Context, items []ItemSummary) err
 	return rows.Err()
 }
 
+// ItemFileIDs returns each item's file ids, ascending.
+func (s *Store) ItemFileIDs(ctx context.Context, itemIDs []int64) (map[int64][]int64, error) {
+	items := make([]ItemSummary, len(itemIDs))
+	for i, id := range itemIDs {
+		items[i].ID = id
+	}
+	if err := s.loadSummaryFileIDs(ctx, items); err != nil {
+		return nil, err
+	}
+	out := make(map[int64][]int64, len(items))
+	for _, it := range items {
+		out[it.ID] = it.FileIDs
+	}
+	return out, nil
+}
+
 func (s *Store) loadSummaryCollections(ctx context.Context, items []ItemSummary) error {
 	if len(items) == 0 {
 		return nil

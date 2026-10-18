@@ -312,23 +312,29 @@ func (s *Store) RestoreItem(ctx context.Context, id int64) error {
 }
 
 func (s *Store) MarkItemTrashed(ctx context.Context, id int64) error {
+	return s.MarkItemsTrashed(ctx, []int64{id})
+}
+
+// MarkItemsTrashed trashes several items at once, all or none.
+func (s *Store) MarkItemsTrashed(ctx context.Context, ids []int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-
-	res, err := tx.ExecContext(ctx, `
-		UPDATE media_items SET deleted_at = datetime('now'), updated_at = datetime('now')
-		WHERE id = ? AND deleted_at IS NULL`, id)
-	if err != nil {
-		return err
-	}
-	if err := requireRow(res); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE media_files SET status = 'trashed' WHERE item_id = ?`, id); err != nil {
-		return err
+	for _, id := range ids {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE media_items SET deleted_at = datetime('now'), updated_at = datetime('now')
+			WHERE id = ? AND deleted_at IS NULL`, id)
+		if err != nil {
+			return err
+		}
+		if err := requireRow(res); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE media_files SET status = 'trashed' WHERE item_id = ?`, id); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

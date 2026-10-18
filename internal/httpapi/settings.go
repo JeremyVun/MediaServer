@@ -18,8 +18,18 @@ type hlsCacheSettings struct {
 	Available bool   `json:"available"`
 }
 
+type semanticSettings struct {
+	Enabled   bool `json:"enabled"`
+	Available bool `json:"available"`
+}
+
 type settingsResponse struct {
-	HLSCache hlsCacheSettings `json:"hls_cache"`
+	HLSCache               hlsCacheSettings `json:"hls_cache"`
+	SemanticClassification semanticSettings `json:"semantic_classification"`
+}
+
+type setSemanticRequest struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type setHLSCacheRequest struct {
@@ -27,7 +37,45 @@ type setHLSCacheRequest struct {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.settingsResponse())
+	s.writeSettings(w, r)
+}
+
+// handleSetSemanticClassification stores the Sol toggle. Enabling it while
+// codex is unavailable is allowed: classify falls back to the parser.
+func (s *Server) handleSetSemanticClassification(w http.ResponseWriter, r *http.Request) {
+	var req setSemanticRequest
+	if !decodeStrict(w, r, &req, "invalid settings") {
+		return
+	}
+	if req.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "enabled is required")
+		return
+	}
+	value := "0"
+	if *req.Enabled {
+		value = "1"
+	}
+	if err := s.store.SetSetting(r.Context(), store.SettingSemanticClassification, value); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", "saving setting failed")
+		s.log.Error("save semantic classification", "error", err)
+		return
+	}
+	s.writeSettings(w, r)
+}
+
+func (s *Server) writeSettings(w http.ResponseWriter, r *http.Request) {
+	res := s.settingsResponse()
+	value, err := s.store.GetSetting(r.Context(), store.SettingSemanticClassification)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, "internal", "loading settings failed")
+		s.log.Error("load semantic classification", "error", err)
+		return
+	}
+	res.SemanticClassification = semanticSettings{
+		Enabled:   value == "1",
+		Available: s.semantic != nil && s.semantic.Available(),
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleSetHLSCacheDir moves the transcode cache. The directory is created
@@ -101,7 +149,7 @@ func (s *Server) handleSetHLSCacheDir(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 	}
-	writeJSON(w, http.StatusOK, s.settingsResponse())
+	s.writeSettings(w, r)
 }
 
 func (s *Server) settingsResponse() settingsResponse {

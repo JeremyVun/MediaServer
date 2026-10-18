@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/JeremyVun/MediaServer/internal/classify"
 	"github.com/JeremyVun/MediaServer/internal/events"
 	"github.com/JeremyVun/MediaServer/internal/store"
 	"github.com/JeremyVun/MediaServer/internal/thumbs"
@@ -29,6 +30,21 @@ type itemSummaryResponse struct {
 	Available     bool              `json:"available"`
 	Progress      *progressResponse `json:"progress,omitempty"`
 	CollectionIDs []int64           `json:"collection_ids"`
+	episodeFields
+}
+
+// episodeFields place an item in its show; all null for a non-episode.
+type episodeFields struct {
+	Show       *showRefResponse `json:"show"`
+	Season     *int             `json:"season"`
+	Episode    *int             `json:"episode"`
+	EpisodeEnd *int             `json:"episode_end"`
+	NeedsCheck bool             `json:"needs_check"`
+}
+
+type showRefResponse struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
 }
 
 type progressResponse struct {
@@ -49,6 +65,7 @@ type itemDetailResponse struct {
 	CollectionIDs []int64           `json:"collection_ids"`
 	Progress      *progressResponse `json:"progress,omitempty"`
 	Files         []fileResponse    `json:"files"`
+	episodeFields
 }
 
 type fileResponse struct {
@@ -76,15 +93,21 @@ type streamResponse struct {
 }
 
 type patchItemRequest struct {
-	Type    *string `json:"type"`
-	Title   *string `json:"title"`
-	Year    *int    `json:"year"`
-	Summary *string `json:"summary"`
+	Type       *string       `json:"type"`
+	Title      *string       `json:"title"`
+	Year       *int          `json:"year"`
+	Summary    *string       `json:"summary"`
+	ShowID     *int64        `json:"show_id"`
+	Season     *int          `json:"season"`
+	Episode    *int          `json:"episode"`
+	EpisodeEnd optional[int] `json:"episode_end"`
+	Confirmed  bool          `json:"confirmed"`
 }
 
 type progressRequest struct {
 	PositionS float64 `json:"position_s"`
 	DurationS float64 `json:"duration_s"`
+	Completed bool    `json:"completed"`
 }
 
 func (s *Server) handleListItems(w http.ResponseWriter, r *http.Request) {
@@ -154,44 +177,39 @@ func (s *Server) handlePatchItem(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "invalid item patch")
 		return
 	}
-	if req.Type == nil && req.Title == nil && req.Year == nil && req.Summary == nil {
+	if req.Type == nil && req.Title == nil && req.Year == nil && req.Summary == nil &&
+		req.ShowID == nil && req.Season == nil && req.Episode == nil && !req.EpisodeEnd.Set && !req.Confirmed {
 		writeError(w, http.StatusBadRequest, "bad_request", "no fields to update")
 		return
 	}
-	if req.Title != nil {
-		title := strings.TrimSpace(*req.Title)
-		if title == "" {
-			writeError(w, http.StatusBadRequest, "bad_request", "title is required")
-			return
-		}
-		req.Title = &title
-	}
 	if req.Type != nil {
 		typ := strings.TrimSpace(*req.Type)
-		switch typ {
-		case "video", "movie", "episode":
-			req.Type = &typ
-		default:
-			writeError(w, http.StatusBadRequest, "bad_request", "invalid item type")
-			return
-		}
+		req.Type = &typ
 	}
 	if req.Summary != nil {
 		summary := strings.TrimSpace(*req.Summary)
 		req.Summary = &summary
 	}
 
-	item, err := s.store.UpdateItem(r.Context(), id, store.UpdateItemParams{
-		Type:    req.Type,
-		Title:   req.Title,
-		Year:    req.Year,
-		Summary: req.Summary,
+	item, err := s.classifier.EditItem(r.Context(), id, classify.ItemEdit{
+		Title:      req.Title,
+		Type:       req.Type,
+		Year:       req.Year,
+		Summary:    req.Summary,
+		ShowID:     req.ShowID,
+		Season:     req.Season,
+		Episode:    req.Episode,
+		EpisodeEnd: store.Nullable[int](req.EpisodeEnd),
+		Confirmed:  req.Confirmed,
 	})
-	if err != nil {
-		writeStoreError(w, err)
+	if errors.Is(err, classify.ErrEpisodeNeedsShow) {
+		writeError(w, http.StatusBadRequest, "invalid_episode", "an episode needs a show")
 		return
 	}
-	s.publishItemEvent(r, events.ItemUpdated, item.ID)
+	if err != nil {
+		s.writeServiceError(w, "edit item", err)
+		return
+	}
 	resp, ok := s.detailResponse(w, r, item)
 	if !ok {
 		return
@@ -204,7 +222,8 @@ func (s *Server) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.store.GetItem(r.Context(), id); err != nil {
+	item, err := s.store.GetItem(r.Context(), id)
+	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -219,13 +238,14 @@ func (s *Server) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "position_s and duration_s must be valid")
 		return
 	}
-	progress, err := s.store.UpsertProgress(r.Context(), id, req.PositionS, req.DurationS, false)
+	progress, err := s.store.UpsertProgress(r.Context(), id, req.PositionS, req.DurationS, req.Completed)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "saving progress failed")
 		s.log.Error("save progress", "item_id", id, "error", err)
 		return
 	}
 	s.publishItemEvent(r, events.ItemUpdated, id)
+	s.publishShowOf(item)
 	writeJSON(w, http.StatusOK, progressToResponse(&progress))
 }
 
@@ -310,7 +330,9 @@ func (s *Server) detailResponse(w http.ResponseWriter, r *http.Request, item sto
 		}
 		fileResponses = append(fileResponses, fileToResponse(file, streams))
 	}
-	return itemToDetailResponse(item, s.thumbURL(summary), summary.CollectionIDs, progress, fileResponses), true
+	resp := itemToDetailResponse(item, s.thumbURL(summary), summary.CollectionIDs, progress, fileResponses)
+	resp.episodeFields = episodeFieldsOf(summary)
+	return resp, true
 }
 
 func progressToResponse(progress *store.Progress) *progressResponse {
@@ -387,9 +409,23 @@ func (s *Server) itemSummaries(items []store.ItemSummary) []itemSummaryResponse 
 			Available:     item.Available,
 			Progress:      progress,
 			CollectionIDs: item.CollectionIDs,
+			episodeFields: episodeFieldsOf(item),
 		})
 	}
 	return out
+}
+
+func episodeFieldsOf(item store.ItemSummary) episodeFields {
+	f := episodeFields{
+		Season:     item.Season,
+		Episode:    item.Episode,
+		EpisodeEnd: item.EpisodeEnd,
+		NeedsCheck: item.NeedsCheck,
+	}
+	if item.Show != nil {
+		f.Show = &showRefResponse{ID: item.Show.ID, Title: item.Show.Title}
+	}
+	return f
 }
 
 // thumbURL appends ?v=<thumb mtime> once the thumbnail exists, which lets the

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"github.com/JeremyVun/MediaServer/internal/classify"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -23,7 +24,11 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		t.Fatalf("migrate: %v", err)
 	}
 	st := store.New(sqldb)
-	srv := NewServer(Options{Store: st, Bus: events.NewBus(), Version: "test", ThumbsDir: t.TempDir()})
+	bus := events.NewBus()
+	srv := NewServer(Options{
+		Store: st, Bus: bus, Version: "test", ThumbsDir: t.TempDir(),
+		Classifier: classify.New(classify.Options{Store: st, Bus: bus, ArtDir: t.TempDir()}),
+	})
 	return srv, st
 }
 
