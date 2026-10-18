@@ -29,6 +29,7 @@ import {
   useRetryJob,
   useRoots,
   useSetHLSCacheDir,
+  useSetSemanticClassification,
   useSettings,
   useTrashJobFile,
 } from '../../api/queries.ts'
@@ -108,8 +109,9 @@ export function SettingsPage() {
           Tailwind's sm:/lg: breakpoints track the window, not this column, so
           the usual "go wide" rules would misfire in a ~22rem rail. */}
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start lg:gap-x-0">
-        <div className="min-w-0 lg:pr-8">
+        <div className="min-w-0 space-y-8 lg:pr-8">
           <AppearanceSection />
+          <LibrarySection />
         </div>
 
         {/* A hairline defines the rail as a sidebar, so its list of sections
@@ -176,6 +178,75 @@ export function SettingsPage() {
         </p>
       </Dialog>
     </main>
+  )
+}
+
+function LibrarySection() {
+  const settings = useSettings()
+  const setSemantic = useSetSemanticClassification()
+  const { toast } = useToast()
+  const semantic = settings.data?.semantic_classification
+  const available = semantic?.available ?? false
+  const on = available && (semantic?.enabled ?? false)
+
+  const toggle = () =>
+    setSemantic.mutate(!on, {
+      onError: (error) => toast({ message: mutationErrorMessage(error, "Couldn't change the setting") }),
+    })
+
+  return (
+    <section aria-labelledby="library-heading" className="space-y-3">
+      <h2 id="library-heading" className="text-lg font-semibold">
+        Library
+      </h2>
+      {settings.isPending && <Skeleton className="h-28" />}
+      {settings.isError && <EmptyState text="Can't load settings" />}
+      {semantic && (
+        <label
+          className={[
+            'bg-surface border-line flex items-start gap-4 rounded-lg border p-4',
+            available ? 'cursor-pointer' : 'cursor-not-allowed',
+          ].join(' ')}
+        >
+          <span className="min-w-0 flex-1">
+            <span id="semantic-label" className={['block text-md font-semibold', available ? '' : 'text-secondary'].join(' ')}>
+              Semantic classification
+            </span>
+            <span id="semantic-description" className="mt-1 block max-w-[60ch] text-sm text-secondary">
+              When a file name is unclear, Sol works out what the video is. Sol sees the file's name, folder and
+              length, plus your show titles. It runs on your Codex account.
+            </span>
+            {!available && (
+              <span className="mt-3 block text-sm text-primary">
+                Codex isn't available on this Mac. Install Codex to turn this on.
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={on}
+            aria-labelledby="semantic-label"
+            aria-describedby="semantic-description"
+            disabled={!available || setSemantic.isPending}
+            onClick={toggle}
+            className={[
+              'relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full border disabled:cursor-not-allowed',
+              on ? 'bg-primary border-transparent' : 'bg-inset border-line-strong',
+              available ? 'cursor-pointer' : 'opacity-50',
+            ].join(' ')}
+          >
+            <span
+              aria-hidden
+              className={[
+                'absolute top-1/2 size-[18px] -translate-y-1/2 rounded-full transition-[left] motion-reduce:transition-none',
+                on ? 'bg-canvas left-[22px]' : 'bg-tertiary left-[2px]',
+              ].join(' ')}
+            />
+          </button>
+        </label>
+      )}
+    </section>
   )
 }
 

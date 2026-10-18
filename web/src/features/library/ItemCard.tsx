@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { Clapperboard } from 'lucide-react'
 import type { ItemSummary } from '../../api/types.ts'
@@ -18,6 +19,7 @@ export function ItemCard({
   libraryPath,
   selection,
   resume = false,
+  footer,
 }: {
   item: ItemSummary
   cardStyle: CardStyle
@@ -27,6 +29,8 @@ export function ItemCard({
   selection?: CardSelection
   /** Continue watching: the whole card resumes. */
   resume?: boolean
+  /** Controls under the card, such as a collection's reorder bar. */
+  footer?: ReactNode
 }) {
   const progress = item.progress?.completed
     ? 100
@@ -64,6 +68,7 @@ export function ItemCard({
           {!minimal && <CardMeta title={item.title} meta={meta} />}
         </Link>
       )}
+      {footer}
     </SelectableCard>
   )
 }

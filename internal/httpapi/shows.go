@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/JeremyVun/MediaServer/internal/classify"
 	"github.com/JeremyVun/MediaServer/internal/events"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 )
 
 type showDetailResponse struct {
@@ -172,6 +174,29 @@ func (s *Server) handleShowMatchSearch(w http.ResponseWriter, r *http.Request) {
 		out = append(out, c)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": out})
+}
+
+func (s *Server) handleShowMatchSeasons(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.URL.Query().Get("tvmaze_id"))
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "tvmaze_id must be a positive integer")
+		return
+	}
+	if s.tvmaze == nil {
+		writeError(w, http.StatusServiceUnavailable, "tvmaze_unavailable", "TVmaze is not configured")
+		return
+	}
+	seasons, err := s.tvmaze.Seasons(r.Context(), id)
+	switch {
+	case errors.Is(err, tvmaze.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found", "no such show on TVmaze")
+		return
+	case err != nil:
+		writeError(w, http.StatusBadGateway, "tvmaze_unavailable", "TVmaze could not be reached")
+		s.log.Warn("tvmaze match seasons", "tvmaze_id", id, "error", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"seasons": seasons})
 }
 
 func (s *Server) handleShowPoster(w http.ResponseWriter, r *http.Request) {

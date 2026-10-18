@@ -1,18 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
+import { api } from '../../api/client.ts'
 import type { ShowSeason } from '../../api/types.ts'
 
-/** A candidate's season numbers, asked of TVmaze directly: the server's
-    match-search carries none (one request per candidate, M13), and this is
-    one CORS request per pick, only while the Change dialog is open. On
-    failure the season row stays hidden and the server keeps its offset. */
+/** A candidate's season numbers, asked of the server per pick: match-search
+    carries none (one request per candidate, M13). On failure the season row
+    stays hidden and the server keeps its offset. */
 export function useTvmazeSeasons(tvmazeID: number | null) {
   return useQuery({
     queryKey: ['tvmaze-seasons', tvmazeID],
-    queryFn: async ({ signal }) => {
-      const res = await fetch(`https://api.tvmaze.com/shows/${tvmazeID}/seasons`, { signal })
-      if (!res.ok) throw new Error(`TVmaze ${res.status}`)
-      const body = (await res.json()) as { number: number | null }[]
-      return body.map((s) => s.number).filter((n): n is number => n != null && n > 0)
+    queryFn: async () => {
+      const body = await api<{ seasons: number[] }>(`/api/shows/match-seasons?tvmaze_id=${tvmazeID}`)
+      return body.seasons
     },
     enabled: tvmazeID != null,
     staleTime: Infinity,

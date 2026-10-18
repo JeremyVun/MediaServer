@@ -73,6 +73,14 @@ func (e *showsEnv) serveTVmaze(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "down", http.StatusServiceUnavailable)
 		return
 	}
+	switch r.URL.Path {
+	case "/shows/60574/seasons":
+		w.Write([]byte(`[{"number": 1}, {"number": 3}, {"number": 2}, {"number": 0}, {"number": null}]`))
+		return
+	case "/shows/404/seasons":
+		http.NotFound(w, r)
+		return
+	}
 	if r.URL.Path != "/search/shows" || r.URL.Query().Get("q") != "andor" {
 		w.Write([]byte("[]"))
 		return
@@ -727,6 +735,27 @@ func TestMatchSearchProxiesTVmaze(t *testing.T) {
 	e.fails("GET", "/api/shows/match-search?q=+", nil, 400, "bad_request")
 	e.tvDown.Store(true)
 	e.fails("GET", "/api/shows/match-search?q=andor", nil, 502, "tvmaze_unavailable")
+}
+
+func TestMatchSeasonsProxiesTVmaze(t *testing.T) {
+	e := newShowsEnv(t)
+	var got struct {
+		Seasons []int `json:"seasons"`
+	}
+	e.ok("GET", "/api/shows/match-seasons?tvmaze_id=60574", nil, &got)
+	if !reflect.DeepEqual(got.Seasons, []int{1, 2, 3}) {
+		t.Fatalf("seasons = %v", got.Seasons)
+	}
+	e.ok("GET", "/api/shows/match-seasons?tvmaze_id=7", nil, &got)
+	if got.Seasons == nil || len(got.Seasons) != 0 {
+		t.Fatalf("no seasons = %#v", got.Seasons)
+	}
+	for _, bad := range []string{"", "abc", "0", "-3"} {
+		e.fails("GET", "/api/shows/match-seasons?tvmaze_id="+bad, nil, 400, "bad_request")
+	}
+	e.fails("GET", "/api/shows/match-seasons?tvmaze_id=404", nil, 404, "not_found")
+	e.tvDown.Store(true)
+	e.fails("GET", "/api/shows/match-seasons?tvmaze_id=60574", nil, 502, "tvmaze_unavailable")
 }
 
 func TestTrashShowMovesEveryLiveEpisode(t *testing.T) {

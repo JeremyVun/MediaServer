@@ -140,10 +140,11 @@ const CANDIDATES = [
 ] as const
 
 async function open(page: Page, flat: boolean) {
-  await page.route('https://api.tvmaze.com/**', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: '[{"number":1}]' }),
-  )
   await mockLibraryApi(page, { entries: [], continueWatching: [], collections: [], shows }, async (route: Route, path) => {
+    if (path === '/api/shows/match-seasons') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"seasons":[1]}' })
+      return true
+    }
     if (path === '/api/shows/match-search') {
       const results = CANDIDATES.map(([id, name, year, network]) => ({ tvmaze_id: id, name, year, network, poster_url: `/api/cand/${id}`, local_show_id: null }))
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ results }) })

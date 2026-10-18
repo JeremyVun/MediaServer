@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { Clapperboard, Tv } from 'lucide-react'
 import type { ShowSummary } from '../../api/types.ts'
@@ -16,6 +17,7 @@ export function ShowCard({
   libraryPath,
   selection,
   spineOnly = false,
+  footer,
 }: {
   show: ShowSummary
   cardStyle: CardStyle
@@ -23,6 +25,8 @@ export function ShowCard({
   selection?: CardSelection
   /** Continue watching always shows the up-next episode. */
   spineOnly?: boolean
+  /** Controls under the card, such as a collection's reorder bar. */
+  footer?: ReactNode
 }) {
   const backdrop = useThumbRetry(show.backdrop_url)
   const splash = !spineOnly && !show.has_progress && !backdrop.broken
@@ -52,7 +56,8 @@ export function ShowCard({
           </div>
           {!minimal && <CardMeta title={show.title} meta={episodes} />}
         </Link>
-      </SelectableCard>
+        {footer}
+    </SelectableCard>
     )
   }
 
@@ -89,6 +94,7 @@ export function ShowCard({
           <CardMeta title={show.title} meta={label} />
         </Link>
       )}
+      {footer}
     </SelectableCard>
   )
 }

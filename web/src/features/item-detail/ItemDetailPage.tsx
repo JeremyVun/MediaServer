@@ -1,20 +1,20 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, Clapperboard, Edit3, Layers, Play, Save, Trash2 } from 'lucide-react'
+import { ArrowLeft, Clapperboard, Layers, Play, Trash2 } from 'lucide-react'
 import {
   useCollections,
   useDeleteItem,
   useHealth,
   useItem,
-  usePatchItem,
   useRemoveItemFromCollection,
   useRestoreItem,
 } from '../../api/queries.ts'
 import type { Collection, ItemDetail, MediaFile } from '../../api/types.ts'
 import { formatBytes, formatClock, formatDuration } from '../../lib/format.ts'
-import { makeRunOrToast, mutationErrorMessage } from '../../lib/mutationFeedback.ts'
+import { makeRunOrToast } from '../../lib/mutationFeedback.ts'
 import { withSearchParam } from '../../lib/searchParams.ts'
-import { Button, Dialog, IconButton, Skeleton, useToast } from '../../ui/index.ts'
+import { Button, Dialog, OfflineLabel, Skeleton, useToast } from '../../ui/index.ts'
+import { ItemHeader } from './ItemHeader.tsx'
 
 export function ItemDetailPage() {
   const id = useNumericParam()
@@ -38,6 +38,7 @@ export function ItemDetailPage() {
   }
   const [userSelectedFileID, setUserSelectedFileID] = useState<number | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   if (id == null) return <DetailShell title="Item not found" backTo={backTo} onBack={goBack} />
   if (item.isPending) return <DetailSkeleton backTo={backTo} onBack={goBack} />
@@ -78,9 +79,14 @@ export function ItemDetailPage() {
       <div className="grid gap-8 lg:grid-cols-[minmax(260px,360px)_1fr]">
         <Poster item={item.data} />
         <section className="min-w-0">
-          <EditableHeader key={item.data.updated_at} item={item.data} />
+          <ItemHeader
+            item={item.data}
+            editing={editing}
+            onEdit={() => setEditing(true)}
+            onDone={() => setEditing(false)}
+          />
 
-          <div className="mt-5 flex flex-wrap gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
             <Button
               variant="primary"
               touch
@@ -100,6 +106,7 @@ export function ItemDetailPage() {
                 Resume from {formatClock(item.data.progress?.position_s)}
               </Button>
             )}
+            {selectedFile && !selectedAvailable && <OfflineLabel className="text-primary text-sm" />}
           </div>
 
           <Facts file={selectedFile} rootName={root?.name} />
@@ -195,7 +202,7 @@ function DetailSkeleton({ backTo, onBack }: { backTo: string; onBack?: () => voi
   return (
     <DetailShell title="Loading" backTo={backTo} onBack={onBack}>
       <div className="grid gap-8 lg:grid-cols-[minmax(260px,360px)_1fr]">
-        <Skeleton className="aspect-[2/3]" />
+        <Skeleton className="aspect-video lg:aspect-[2/3]" />
         <div className="space-y-4">
           <Skeleton className="h-10 w-3/4" />
           <Skeleton className="h-24 w-full" />
@@ -209,7 +216,7 @@ function DetailSkeleton({ backTo, onBack }: { backTo: string; onBack?: () => voi
 function Poster({ item }: { item: ItemDetail }) {
   const [broken, setBroken] = useState(false)
   return (
-    <div className="bg-inset aspect-[2/3] overflow-hidden rounded-lg border border-line">
+    <div className="bg-inset aspect-video overflow-hidden rounded-lg border border-line lg:aspect-[2/3]">
       {!broken ? (
         <img
           src={`/api/items/${item.id}/thumb`}
@@ -223,103 +230,6 @@ function Poster({ item }: { item: ItemDetail }) {
         </div>
       )}
     </div>
-  )
-}
-
-function EditableHeader({ item }: { item: ItemDetail }) {
-  const patch = usePatchItem(item.id)
-  const { toast } = useToast()
-  const [editing, setEditing] = useState(false)
-  const [title, setTitle] = useState(item.title)
-  const [year, setYear] = useState(item.year?.toString() ?? '')
-  const [type, setType] = useState<ItemDetail['type']>(item.type)
-  const [summary, setSummary] = useState(item.summary ?? '')
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    const trimmedTitle = title.trim()
-    if (!trimmedTitle) return
-    patch.mutate(
-      {
-        title: trimmedTitle,
-        year: year.trim() ? Number(year) : undefined,
-        type,
-        summary: summary.trim(),
-      },
-      {
-        onSuccess: () => setEditing(false),
-        onError: (error) => toast({ message: mutationErrorMessage(error, "Couldn't save changes") }),
-      },
-    )
-  }
-
-  if (!editing) {
-    return (
-      <header className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="mb-1 text-sm text-secondary">{[item.type, item.year].filter(Boolean).join(' · ')}</p>
-          <h1 className="text-2xl font-semibold">{item.title}</h1>
-          {item.summary && <p className="mt-4 max-w-3xl text-base text-secondary">{item.summary}</p>}
-        </div>
-        <IconButton aria-label="Edit item" onClick={() => setEditing(true)}>
-          <Edit3 aria-hidden className="size-5" strokeWidth={1.75} />
-        </IconButton>
-      </header>
-    )
-  }
-
-  return (
-    <form onSubmit={submit} className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-[1fr_120px_140px]">
-        <label className="space-y-1">
-          <span className="text-sm text-secondary">Title</span>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="bg-inset border-line-strong text-primary h-10 w-full rounded-sm border px-3 text-base"
-          />
-        </label>
-        <label className="space-y-1">
-          <span className="text-sm text-secondary">Year</span>
-          <input
-            value={year}
-            inputMode="numeric"
-            onChange={(e) => setYear(e.target.value.replace(/[^\d]/g, '').slice(0, 4))}
-            className="bg-inset border-line-strong text-primary h-10 w-full rounded-sm border px-3 text-base"
-          />
-        </label>
-        <label className="space-y-1">
-          <span className="text-sm text-secondary">Type</span>
-          <select
-            value={type}
-            onChange={(e) => setType(e.target.value as ItemDetail['type'])}
-            className="bg-inset border-line-strong text-primary h-10 w-full rounded-sm border px-3 text-base"
-          >
-            <option value="video">Video</option>
-            <option value="movie">Movie</option>
-            <option value="episode">Episode</option>
-          </select>
-        </label>
-      </div>
-      <label className="block space-y-1">
-        <span className="text-sm text-secondary">Summary</span>
-        <textarea
-          value={summary}
-          onChange={(e) => setSummary(e.target.value)}
-          rows={4}
-          className="bg-inset border-line-strong text-primary w-full resize-y rounded-sm border px-3 py-2 text-base"
-        />
-      </label>
-      <div className="flex gap-2">
-        <Button type="submit" variant="primary" pending={patch.isPending}>
-          <Save aria-hidden className="size-4" strokeWidth={1.75} />
-          Save
-        </Button>
-        <Button variant="ghost" onClick={() => setEditing(false)}>
-          Cancel
-        </Button>
-      </div>
-    </form>
   )
 }
 

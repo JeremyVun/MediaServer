@@ -133,7 +133,9 @@ async function mockM8Server(page: Page): Promise<MockState> {
       const entries =
         url.searchParams.get('in_progress') === '1'
           ? []
-          : state.items.filter((item) => !collectionID || item.collection_ids.includes(collectionID))
+          : collectionID > 0
+            ? state.order.flatMap((id) => state.items.filter((item) => item.id === id))
+            : state.items
       await json(route, { total: entries.length, entries: entries.map((item) => ({ kind: 'item', ...item })) })
       return
     }
@@ -161,8 +163,8 @@ async function mockM8Server(page: Page): Promise<MockState> {
     }
 
     if (request.method() === 'PUT' && path === '/api/collections/1/order') {
-      const body = JSON.parse(request.postData() ?? '{}') as { item_ids: number[] }
-      state.order = body.item_ids
+      const body = JSON.parse(request.postData() ?? '{}') as { entries: { item_id: number }[] }
+      state.order = body.entries.map((entry) => entry.item_id)
       await route.fulfill({ status: 204 })
       return
     }

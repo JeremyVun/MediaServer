@@ -65,6 +65,8 @@ interface Requests {
   patches: unknown[]
   matches: unknown[]
   merges: unknown[]
+  seasonLookups: number[]
+  tvmazeRequests: string[]
   log: LibraryLog
 }
 
@@ -72,16 +74,10 @@ async function setup(page: Page, options: { matchTaken?: boolean; show?: ShowDet
   let show = options.show ?? furious()
   const andor = showDetail(showEntry(9, { title: 'Andor', episode_count: 12 }))
   const other = showDetail(showEntry(10, { title: 'Below', episode_count: 6 }))
-  const requests: Omit<Requests, 'log'> = { patches: [], matches: [], merges: [] }
+  const requests: Omit<Requests, 'log'> = { patches: [], matches: [], merges: [], seasonLookups: [], tvmazeRequests: [] }
 
-  await page.route('https://api.tvmaze.com/**', async (route) => {
-    const id = Number(new URL(route.request().url()).pathname.split('/')[2])
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      headers: { 'access-control-allow-origin': '*' },
-      body: JSON.stringify((id === 2 ? [2, 3] : [1, 2]).map((number) => ({ number }))),
-    })
+  page.on('request', (request) => {
+    if (new URL(request.url()).hostname === 'api.tvmaze.com') requests.tvmazeRequests.push(request.url())
   })
 
   const log = await mockLibraryApi(
@@ -113,6 +109,11 @@ async function setup(page: Page, options: { matchTaken?: boolean; show?: ShowDet
       if (path === `/api/shows/${SHOW_ID}/merge`) {
         requests.merges.push(route.request().postDataJSON())
         await json(route, andor)
+        return true
+      }
+      if (path === '/api/shows/match-seasons') {
+        requests.seasonLookups.push(Number(url.searchParams.get('tvmaze_id')))
+        await json(route, { seasons: url.searchParams.get('tvmaze_id') === '2' ? [2, 3] : [1, 2] })
         return true
       }
       if (path === '/api/shows/match-search') {
@@ -232,6 +233,8 @@ test('Change matches to a candidate', async ({ page }) => {
   await dialog.getByRole('button', { name: 'Save' }).click()
   await expect(dialog).toBeHidden()
   expect(requests.matches).toEqual([{ tvmaze_id: 1, season_offset: 0 }])
+  expect(requests.seasonLookups).toEqual([81234, 2, 1])
+  expect(requests.tvmazeRequests).toEqual([])
 })
 
 test('Change sends a season offset when TVmaze numbers the season differently', async ({ page }) => {

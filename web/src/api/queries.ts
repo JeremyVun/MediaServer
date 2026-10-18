@@ -68,8 +68,6 @@ export function useSettings() {
   })
 }
 
-// Moving the cache stops in-flight transcodes, so health (active sessions,
-// queue depth) is stale the moment this succeeds.
 export function useSetSemanticClassification() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -79,6 +77,8 @@ export function useSetSemanticClassification() {
   })
 }
 
+// Moving the cache stops in-flight transcodes, so health (active sessions,
+// queue depth) is stale the moment this succeeds.
 export function useSetHLSCacheDir() {
   const queryClient = useQueryClient()
   return useMutation({

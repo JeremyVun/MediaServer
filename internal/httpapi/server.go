@@ -124,6 +124,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{sid}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/sessions/{sid}/teardown", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/shows/match-search", s.handleShowMatchSearch)
+	mux.HandleFunc("GET /api/shows/match-seasons", s.handleShowMatchSeasons)
 	mux.HandleFunc("GET /api/shows/{id}", s.handleGetShow)
 	mux.HandleFunc("PATCH /api/shows/{id}", s.handlePatchShow)
 	mux.HandleFunc("POST /api/shows/{id}/match", s.handleShowMatch)

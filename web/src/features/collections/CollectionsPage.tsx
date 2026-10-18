@@ -1,25 +1,20 @@
-import { useMemo, useState, type DragEvent, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import {
-  ArrowLeft,
-  Clapperboard,
-  Edit3,
-  GripVertical,
-  Plus,
-  Save,
-  SearchX,
-  Trash2,
-} from 'lucide-react'
+import { ArrowLeft, Clapperboard, Edit3, GripVertical, Plus, Save, SearchX, Trash2, X } from 'lucide-react'
 import {
   useCollections,
   useCreateCollection,
   useDeleteCollection,
-  useLibraryItems,
+  useLibraryEntries,
+  useRemoveItemFromCollection,
+  useRemoveShowFromCollection,
   useRenameCollection,
-  useReorderCollection,
+  useReorderCollectionEntries,
 } from '../../api/queries.ts'
-import type { Collection, ItemSummary } from '../../api/types.ts'
-import { formatDuration } from '../../lib/format.ts'
+import type { Collection, LibraryEntry } from '../../api/types.ts'
+import { useCardStyle } from '../../theme/cardStyle.ts'
+import { ItemCard } from '../library/ItemCard.tsx'
+import { ShowCard } from '../library/ShowCard.tsx'
 import { makeRunOrToast, mutationErrorMessage } from '../../lib/mutationFeedback.ts'
 import { Button, Card, Dialog, IconButton, Input, Skeleton, useToast } from '../../ui/index.ts'
 
@@ -159,54 +154,72 @@ function CollectionCard({ collection }: { collection: Collection }) {
 function CollectionDetail({ collection }: { collection: Collection }) {
   const navigate = useNavigate()
   const { toast } = useToast()
-  const itemsQuery = useLibraryItems({ q: '', collection_id: collection.id })
+  const cardStyle = useCardStyle()
+  const entriesQuery = useLibraryEntries({ q: '', collection_id: collection.id })
   const deleteCollection = useDeleteCollection()
-  const reorder = useReorderCollection()
+  const reorder = useReorderCollectionEntries()
+  const removeItem = useRemoveItemFromCollection()
+  const removeShow = useRemoveShowFromCollection()
   const runOrToast = makeRunOrToast(toast)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [draggedID, setDraggedID] = useState<number | null>(null)
-  const items = useMemo(() => itemsQuery.data?.pages.flatMap((page) => page.items) ?? [], [itemsQuery.data])
-  const [orderIDs, setOrderIDs] = useState<number[]>([])
+  const [draggedKey, setDraggedKey] = useState<string | null>(null)
+  const entries = useMemo(
+    () => entriesQuery.data?.pages.flatMap((page) => page.entries) ?? [],
+    [entriesQuery.data],
+  )
+  const [orderKeys, setOrderKeys] = useState<string[]>([])
   const ordered = useMemo(() => {
-    const itemIDs = items.map((item) => item.id)
-    if (!sameNumberSet(itemIDs, orderIDs)) return items
-    const byID = new Map(items.map((item) => [item.id, item]))
-    return orderIDs.flatMap((id) => {
-      const item = byID.get(id)
-      return item ? [item] : []
+    if (!sameKeySet(entries.map(entryKey), orderKeys)) return entries
+    const byKey = new Map(entries.map((entry) => [entryKey(entry), entry]))
+    return orderKeys.flatMap((key) => {
+      const entry = byKey.get(key)
+      return entry ? [entry] : []
     })
-  }, [items, orderIDs])
+  }, [entries, orderKeys])
+  const backTo = `/collections/${collection.id}`
 
-  const commitOrder = (next: ItemSummary[]) => {
-    setOrderIDs(next.map((item) => item.id))
+  // A reorder must name every member, so the whole collection is loaded.
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = entriesQuery
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
+
+  const commitOrder = (next: LibraryEntry[]) => {
+    if (hasNextPage) return
+    setOrderKeys(next.map(entryKey))
     reorder.mutate(
-      { collectionID: collection.id, itemIDs: next.map((item) => item.id) },
+      {
+        collectionID: collection.id,
+        entries: next.map((entry) => (entry.kind === 'show' ? { show_id: entry.id } : { item_id: entry.id })),
+      },
       { onError: (error) => toast({ message: mutationErrorMessage(error, "Couldn't reorder collection") }) },
     )
   }
 
-  const moveItem = (itemID: number, delta: number) => {
-    const index = ordered.findIndex((item) => item.id === itemID)
-    const nextIndex = index + delta
-    if (index < 0 || nextIndex < 0 || nextIndex >= ordered.length) return
+  const moveTo = (key: string, to: number) => {
+    const from = ordered.findIndex((entry) => entryKey(entry) === key)
+    if (from < 0 || to < 0 || to >= ordered.length || from === to) return
     const next = [...ordered]
-    const [item] = next.splice(index, 1)
-    next.splice(nextIndex, 0, item)
+    const [entry] = next.splice(from, 1)
+    next.splice(to, 0, entry)
     commitOrder(next)
   }
 
-  const onDrop = (targetID: number) => {
-    if (draggedID == null || draggedID === targetID) return
-    const from = ordered.findIndex((item) => item.id === draggedID)
-    const to = ordered.findIndex((item) => item.id === targetID)
-    if (from < 0 || to < 0) return
-    const next = [...ordered]
-    const [item] = next.splice(from, 1)
-    next.splice(to, 0, item)
-    setDraggedID(null)
-    commitOrder(next)
+  const onDrop = (targetKey: string) => {
+    if (draggedKey == null || draggedKey === targetKey) return
+    setDraggedKey(null)
+    moveTo(draggedKey, ordered.findIndex((entry) => entryKey(entry) === targetKey))
   }
+
+  const remove = (entry: LibraryEntry) =>
+    void runOrToast(
+      () =>
+        entry.kind === 'show'
+          ? removeShow.mutateAsync({ collectionID: collection.id, showID: entry.id })
+          : removeItem.mutateAsync({ collectionID: collection.id, itemID: entry.id }),
+      "Couldn't update collection",
+    )
 
   // 4.3: confirm before deleting — items stay in the library either way, but
   // the collection itself is gone for good (no restore endpoint exists in
@@ -232,7 +245,9 @@ function CollectionDetail({ collection }: { collection: Collection }) {
           </Link>
           <div>
             <h1 className="text-xl font-semibold">{collection.name}</h1>
-            <p className="text-sm text-secondary">{collection.item_count} items</p>
+            <p className="text-sm text-secondary">
+              {entriesQuery.isSuccess ? entriesLabel(entries) : `${collection.item_count} items`}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -247,29 +262,44 @@ function CollectionDetail({ collection }: { collection: Collection }) {
         </div>
       </header>
 
-      {itemsQuery.isPending && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
+      {entriesQuery.isPending && (
+        <div className={GRID}>
           {Array.from({ length: 8 }, (_, i) => (
             <Skeleton key={i} className="aspect-video" />
           ))}
         </div>
       )}
-      {itemsQuery.isError && <EmptyCollections text="Can't load this collection" />}
-      {!itemsQuery.isPending && ordered.length === 0 && <EmptyCollections text="Collection is empty" />}
+      {entriesQuery.isError && <EmptyCollections text="Can't load this collection" />}
+      {entriesQuery.isSuccess && ordered.length === 0 && <EmptyCollections text="Collection is empty" />}
       {ordered.length > 0 && (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]">
-          {ordered.map((item, index) => (
-            <CollectionItemCard
-              key={item.id}
-              item={item}
-              backTo={`/collections/${collection.id}`}
-              first={index === 0}
-              last={index === ordered.length - 1}
-              onMove={moveItem}
-              onDragStart={() => setDraggedID(item.id)}
-              onDrop={() => onDrop(item.id)}
-            />
-          ))}
+        <div data-collection-grid className={GRID}>
+          {ordered.map((entry, index) => {
+            const key = entryKey(entry)
+            const footer = (
+              <ReorderBar
+                title={entry.title}
+                first={index === 0}
+                last={index === ordered.length - 1}
+                onMove={(delta) => moveTo(key, index + delta)}
+                onRemove={() => remove(entry)}
+              />
+            )
+            return (
+              <div
+                key={key}
+                draggable
+                onDragStart={() => setDraggedKey(key)}
+                onDragOver={(event: DragEvent) => event.preventDefault()}
+                onDrop={() => onDrop(key)}
+              >
+                {entry.kind === 'show' ? (
+                  <ShowCard show={entry} cardStyle={cardStyle} libraryPath={backTo} footer={footer} />
+                ) : (
+                  <ItemCard item={entry} cardStyle={cardStyle} libraryPath={backTo} footer={footer} />
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -303,87 +333,34 @@ function CollectionDetail({ collection }: { collection: Collection }) {
   )
 }
 
-function CollectionItemCard({
-  item,
-  backTo,
+function ReorderBar({
+  title,
   first,
   last,
   onMove,
-  onDragStart,
-  onDrop,
+  onRemove,
 }: {
-  item: ItemSummary
-  backTo: string
+  title: string
   first: boolean
   last: boolean
-  onMove: (itemID: number, delta: number) => void
-  onDragStart: () => void
-  onDrop: () => void
+  onMove: (delta: number) => void
+  onRemove: () => void
 }) {
-  const [broken, setBroken] = useState(false)
-  const meta = [item.year, formatDuration(item.duration_s)].filter(Boolean).join(' · ')
-  const thumb = (
-    <div className="bg-inset aspect-video">
-      {!broken ? (
-        <img
-          src={item.thumb_url}
-          alt=""
-          loading="lazy"
-          onError={() => setBroken(true)}
-          className="h-full w-full object-cover"
-        />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-tertiary">
-          <Clapperboard aria-hidden className="size-10" strokeWidth={1.5} />
-        </div>
-      )}
-    </div>
-  )
-  const details = (
-    <div className="p-3">
-      <h2 className="truncate text-md font-medium">{item.title}</h2>
-      <p className="truncate text-sm text-secondary">{meta}</p>
-    </div>
-  )
   return (
-    <Card
-      interactive
-      draggable
-      onDragStart={onDragStart}
-      onDragOver={(event: DragEvent) => event.preventDefault()}
-      onDrop={onDrop}
-      className="overflow-hidden"
-    >
-      {/* 3.1: the poster plays instantly when available; the metadata strip
-          below opens details. Unavailable items link the whole tile to
-          details, same as before. */}
-      {item.available ? (
-        <>
-          <Link to={`/watch/${item.id}`} state={{ from: backTo }} aria-label={`Play ${item.title}`} className="block">
-            {thumb}
-          </Link>
-          <Link to={`/items/${item.id}`} className="block">
-            {details}
-          </Link>
-        </>
-      ) : (
-        <Link to={`/items/${item.id}`} className="block">
-          {thumb}
-          {details}
-        </Link>
-      )}
-      <div className="border-line flex items-center justify-between border-t px-2 py-2">
-        <GripVertical aria-hidden className="text-tertiary size-4" strokeWidth={1.75} />
-        <div className="flex gap-1">
-          <IconButton aria-label="Move earlier" disabled={first} onClick={() => onMove(item.id, -1)}>
-            <ArrowLeft aria-hidden className="size-4 rotate-90" strokeWidth={1.75} />
-          </IconButton>
-          <IconButton aria-label="Move later" disabled={last} onClick={() => onMove(item.id, 1)}>
-            <ArrowLeft aria-hidden className="size-4 -rotate-90" strokeWidth={1.75} />
-          </IconButton>
-        </div>
+    <div className="border-line flex items-center justify-between border-t px-2 py-2">
+      <GripVertical aria-hidden className="text-tertiary size-4" strokeWidth={1.75} />
+      <div className="flex gap-1">
+        <IconButton aria-label="Move earlier" disabled={first} onClick={() => onMove(-1)}>
+          <ArrowLeft aria-hidden className="size-4 rotate-90" strokeWidth={1.75} />
+        </IconButton>
+        <IconButton aria-label="Move later" disabled={last} onClick={() => onMove(1)}>
+          <ArrowLeft aria-hidden className="size-4 -rotate-90" strokeWidth={1.75} />
+        </IconButton>
+        <IconButton aria-label={`Remove ${title} from collection`} onClick={onRemove}>
+          <X aria-hidden className="size-4" strokeWidth={1.75} />
+        </IconButton>
       </div>
-    </Card>
+    </div>
   )
 }
 
@@ -475,14 +452,27 @@ function EmptyCollections({ text }: { text: string }) {
   )
 }
 
-function sameNumberSet(a: number[], b: number[]): boolean {
+const GRID =
+  'grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4 sm:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]'
+
+function entryKey(entry: LibraryEntry): string {
+  return `${entry.kind}:${entry.id}`
+}
+
+/** `1 show and 2 items`, `3 items`, `1 show`. */
+function entriesLabel(entries: LibraryEntry[]): string {
+  const shows = entries.filter((entry) => entry.kind === 'show').length
+  const items = entries.length - shows
+  return [
+    shows > 0 ? (shows === 1 ? '1 show' : `${shows} shows`) : '',
+    items > 0 || shows === 0 ? (items === 1 ? '1 item' : `${items} items`) : '',
+  ]
+    .filter(Boolean)
+    .join(' and ')
+}
+
+function sameKeySet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
-  const counts = new Map<number, number>()
-  for (const value of a) counts.set(value, (counts.get(value) ?? 0) + 1)
-  for (const value of b) {
-    const count = counts.get(value) ?? 0
-    if (count === 0) return false
-    counts.set(value, count - 1)
-  }
-  return true
+  const set = new Set(a)
+  return b.every((key) => set.has(key))
 }

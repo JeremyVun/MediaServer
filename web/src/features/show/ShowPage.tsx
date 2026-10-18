@@ -19,7 +19,8 @@ import { Button, Dialog, Menu, MenuItem, MenuSeparator, OfflineLabel, Skeleton, 
 import { useThumbRetry } from '../library/useThumbRetry.ts'
 import { CollectionListPicker } from '../library/CollectionListPicker.tsx'
 import { ChangeMatchDialog } from './ChangeMatchDialog.tsx'
-import { CheckStrip } from './CheckStrip.tsx'
+import { CheckStrip, ShowCheckMessage } from './CheckStrip.tsx'
+import { ClampedText } from './ClampedText.tsx'
 import { EpisodeTiles } from './EpisodeTiles.tsx'
 import { firstPlayable, localISODate } from './episodeFormat.ts'
 import { MergeShowDialog } from './MergeShowDialog.tsx'
@@ -115,16 +116,19 @@ function ShowView({ show, back }: { show: ShowDetail; back: Back }) {
           <header data-hero>
             <h1 className="text-2xl font-semibold tracking-tight">{show.title}</h1>
             <MetaLine show={show} />
-            <Summary text={show.summary} />
+            <ClampedText text={show.summary} className="mt-3" />
             {show.needs_check && (
               <CheckStrip
-                show={show}
+                message={<ShowCheckMessage show={show} />}
                 confirming={patch.isPending}
-                onConfirm={() =>
-                  patch.mutate(
-                    { confirmed: true },
-                    { onError: (error) => toast({ message: mutationErrorMessage(error, "Couldn't save") }) },
-                  )
+                onConfirm={
+                  show.tvmaze_id == null
+                    ? undefined
+                    : () =>
+                        patch.mutate(
+                          { confirmed: true },
+                          { onError: (error) => toast({ message: mutationErrorMessage(error, "Couldn't save") }) },
+                        )
                 }
                 onChange={() => setDialog('change')}
               />
@@ -201,21 +205,6 @@ function MetaLine({ show }: { show: ShowDetail }) {
   const meta = [show.year ? String(show.year) : '', show.network ?? '', seasons].filter(Boolean).join(' · ')
   if (!meta) return null
   return <p className="text-secondary mt-1 text-sm">{meta}</p>
-}
-
-function Summary({ text }: { text: string | null }) {
-  const [open, setOpen] = useState(false)
-  if (!text) return null
-  return (
-    <button
-      type="button"
-      aria-expanded={open}
-      onClick={() => setOpen((v) => !v)}
-      className="text-secondary mt-3 block max-w-2xl cursor-pointer text-left text-base"
-    >
-      <span className={`whitespace-pre-line ${open ? '' : 'line-clamp-3'}`}>{text}</span>
-    </button>
-  )
 }
 
 function PlayArea({ show, linkState, more }: { show: ShowDetail; linkState: { from: string }; more: ReactNode }) {
