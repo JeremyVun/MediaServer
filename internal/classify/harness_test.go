@@ -239,8 +239,22 @@ type scheduled struct {
 }
 
 type fakeScheduler struct {
-	mu   sync.Mutex
-	runs []scheduled
+	mu     sync.Mutex
+	runs   []scheduled
+	movies []scheduled // item ids
+}
+
+func (f *fakeScheduler) EnqueueMovieRefresh(_ context.Context, itemID int64, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.movies = append(f.movies, scheduled{itemID, at})
+	return nil
+}
+
+func (f *fakeScheduler) movieRuns() []scheduled {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]scheduled(nil), f.movies...)
 }
 
 func (f *fakeScheduler) EnqueueShowRefresh(_ context.Context, showID int64, at time.Time) error {

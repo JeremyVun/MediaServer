@@ -98,7 +98,14 @@ func (s *Service) EditItem(ctx context.Context, itemID int64, e ItemEdit) (store
 		return store.Item{}, err
 	}
 
-	p := store.UpdateItemParams{Title: e.Title, Year: e.Year, Summary: e.Summary}
+	p := store.UpdateItemParams{Title: e.Title}
+	if e.Year != nil {
+		p.Year = store.SetTo(*e.Year)
+	}
+	if e.Summary != nil {
+		owned := true
+		p.Summary, p.SummaryLocked = store.SetTo(*e.Summary), &owned
+	}
 	if identity {
 		locked := true
 		p.Locked = &locked
@@ -109,6 +116,14 @@ func (s *Service) EditItem(ctx context.Context, itemID int64, e ItemEdit) (store
 	}
 	if typ != item.Type {
 		p.Type = &typ
+	}
+	leftMovie := item.Type == "movie" && typ != "movie"
+	if leftMovie {
+		// TMDB data describes a movie; a later return to movie matches afresh.
+		p.TMDBID, p.ArtAt, p.TMDBCheckedAt = store.SetNull[int64](), store.SetNull[string](), store.SetNull[string]()
+		if !item.SummaryLocked && e.Summary == nil {
+			p.Summary = store.SetNull[string]()
+		}
 	}
 
 	oldShow := item.ShowID
@@ -162,7 +177,13 @@ func (s *Service) EditItem(ctx context.Context, itemID int64, e ItemEdit) (store
 			return store.Item{}, err
 		}
 	}
+	if leftMovie {
+		s.removeItemArt(item.ID)
+	}
 	s.publishItem(ctx, item.ID)
+	if typ == "movie" && item.Type != "movie" && updated.ClassifiedAt != nil && s.TMDBConfigured() {
+		s.scheduleMovieRefresh(ctx, item.ID, s.now())
+	}
 	if oldShow != nil && !sameShow(oldShow, newShow) {
 		if err := s.leftShow(ctx, *oldShow); err != nil {
 			return store.Item{}, err
@@ -429,8 +450,9 @@ func (s *Service) ChangeMatch(ctx context.Context, showID int64, m Match) (store
 	return show, nil
 }
 
-// HardDeleteItem purges an item's row. When it was its show's last item the
-// show goes too, with its cached art, and show.removed is published.
+// HardDeleteItem purges an item's row and its cached backdrop. When it was
+// its show's last item the show goes too, with its cached art, and
+// show.removed is published.
 // Publishing item.removed stays with the caller.
 func (s *Service) HardDeleteItem(ctx context.Context, itemID int64) error {
 	if err := s.lock(ctx); err != nil {
@@ -441,6 +463,7 @@ func (s *Service) HardDeleteItem(ctx context.Context, itemID int64) error {
 	if err != nil {
 		return err
 	}
+	s.removeItemArt(itemID)
 	s.showRemoved(removed)
 	return nil
 }

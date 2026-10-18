@@ -34,6 +34,7 @@ type Config struct {
 	Upload    Upload    `yaml:"upload"`
 	Trash     Trash     `yaml:"trash"`
 	TVmaze    TVmaze    `yaml:"tvmaze"`
+	TMDB      TMDB      `yaml:"tmdb"`
 	Log       Log       `yaml:"log"`
 	Debug     Debug     `yaml:"debug"`
 }
@@ -71,6 +72,12 @@ type Trash struct {
 // proxies.
 type TVmaze struct {
 	BaseURL string `yaml:"base_url"`
+}
+
+// TMDB supplies movie descriptions and backdrops. An empty token turns it
+// off: no TMDB request is ever made.
+type TMDB struct {
+	ReadAccessToken string `yaml:"read_access_token"`
 }
 
 type Log struct {
@@ -125,6 +132,27 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadTMDBToken reads only tmdb.read_access_token from the config file at
+// path, so a scratch server can use the owner's token without it being
+// copied anywhere. Errors never quote the file.
+func LoadTMDBToken(path string) (string, error) {
+	path, err := expandTilde(path)
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read tmdb token: %w", err)
+	}
+	var only struct {
+		TMDB TMDB `yaml:"tmdb"`
+	}
+	if yaml.Unmarshal(raw, &only) != nil {
+		return "", fmt.Errorf("read tmdb token from %s: invalid YAML", path)
+	}
+	return strings.TrimSpace(only.TMDB.ReadAccessToken), nil
+}
+
 func (c *Config) normalize() error {
 	var err error
 	if c.DataDir, err = expandTilde(c.DataDir); err != nil {
@@ -137,6 +165,7 @@ func (c *Config) normalize() error {
 		c.HLSCache.Dir = filepath.Clean(c.HLSCache.Dir)
 	}
 	c.TVmaze.BaseURL = strings.TrimRight(strings.TrimSpace(c.TVmaze.BaseURL), "/")
+	c.TMDB.ReadAccessToken = strings.TrimSpace(c.TMDB.ReadAccessToken)
 	for i := range c.Roots {
 		if c.Roots[i].Path, err = expandTilde(c.Roots[i].Path); err != nil {
 			return err
@@ -287,7 +316,8 @@ func (c *Config) LogDir() string { return filepath.Join(c.DataDir, "logs") }
 // ThumbsDir holds generated thumbnails.
 func (c *Config) ThumbsDir() string { return filepath.Join(c.DataDir, "thumbs") }
 
-// ArtDir holds downloaded artwork (show posters and backdrops).
+// ArtDir holds downloaded artwork (show posters and backdrops, movie
+// backdrops).
 func (c *Config) ArtDir() string { return filepath.Join(c.DataDir, "art") }
 
 func expandTilde(p string) (string, error) {

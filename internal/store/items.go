@@ -12,22 +12,26 @@ import (
 // Item is a logical library entry (one row per video/movie/episode); the
 // bytes live in media_files rows attached to it.
 type Item struct {
-	ID           int64
-	Type         string // video|movie|episode
-	Title        string
-	Year         *int
-	Summary      *string
-	CreatedAt    string  // SQLite datetime text, UTC
-	UpdatedAt    string  //
-	DeletedAt    *string // set when trashed
-	ShowID       *int64
-	Season       *int
-	Episode      *int
-	EpisodeEnd   *int    // nil unless the file spans several episodes
-	ShowKey      *string // parsed show key, kept so edits can teach aliases
-	NeedsCheck   bool
-	Locked       bool
-	ClassifiedAt *string // nil while classify is pending
+	ID            int64
+	Type          string // video|movie|episode
+	Title         string
+	Year          *int
+	Summary       *string
+	CreatedAt     string  // SQLite datetime text, UTC
+	UpdatedAt     string  //
+	DeletedAt     *string // set when trashed
+	ShowID        *int64
+	Season        *int
+	Episode       *int
+	EpisodeEnd    *int    // nil unless the file spans several episodes
+	ShowKey       *string // parsed show key, kept so edits can teach aliases
+	NeedsCheck    bool
+	Locked        bool
+	ClassifiedAt  *string // nil while classify is pending
+	TMDBID        *int64
+	ArtAt         *string // set once the TMDB backdrop is cached
+	TMDBCheckedAt *string // set once TMDB matching settled, matched or not
+	SummaryLocked bool    // the owner wrote the summary, so TMDB never replaces it
 }
 
 // NewItem is the parser's guess at creation; the item starts unclassified,
@@ -44,7 +48,8 @@ type NewItem struct {
 }
 
 const itemCols = `id, type, title, year, summary, created_at, updated_at, deleted_at,
-	show_id, season, episode, episode_end, show_key, needs_check, locked, classified_at`
+	show_id, season, episode, episode_end, show_key, needs_check, locked, classified_at,
+	tmdb_id, art_at, tmdb_checked_at, summary_locked`
 
 const insertItemSQL = `INSERT INTO media_items (type, title, year, summary, show_key, season, episode, episode_end)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
@@ -138,6 +143,19 @@ func (s *Store) ListUnclassifiedItemIDs(ctx context.Context) ([]int64, error) {
 	return collectIDs(rows)
 }
 
+// ListMoviesAwaitingTMDB returns live, classified movies TMDB matching has
+// not settled yet, for the boot sweep.
+func (s *Store) ListMoviesAwaitingTMDB(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id FROM media_items
+		WHERE deleted_at IS NULL AND type = 'movie' AND classified_at IS NOT NULL AND tmdb_checked_at IS NULL
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return collectIDs(rows)
+}
+
 // ListItemsByShow returns every item of a show, live or trashed.
 func (s *Store) ListItemsByShow(ctx context.Context, showID int64) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx,
@@ -160,18 +178,22 @@ func (s *Store) ListItemsByShow(ctx context.Context, showID int64) ([]Item, erro
 // UpdateItemParams applies partial edits: nil or unset fields are left
 // unchanged.
 type UpdateItemParams struct {
-	Type         *string
-	Title        *string
-	Year         *int
-	Summary      *string
-	ShowID       Nullable[int64]
-	Season       Nullable[int]
-	Episode      Nullable[int]
-	EpisodeEnd   Nullable[int]
-	ShowKey      Nullable[string]
-	NeedsCheck   *bool
-	Locked       *bool
-	ClassifiedAt Nullable[string]
+	Type          *string
+	Title         *string
+	Year          Nullable[int]
+	Summary       Nullable[string]
+	ShowID        Nullable[int64]
+	Season        Nullable[int]
+	Episode       Nullable[int]
+	EpisodeEnd    Nullable[int]
+	ShowKey       Nullable[string]
+	NeedsCheck    *bool
+	Locked        *bool
+	ClassifiedAt  Nullable[string]
+	TMDBID        Nullable[int64]
+	ArtAt         Nullable[string]
+	TMDBCheckedAt Nullable[string]
+	SummaryLocked *bool
 }
 
 // UpdateItem rejects with ErrInvalidInput an edit that would leave a
@@ -190,11 +212,11 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, p UpdateItemParams) (I
 	if p.Title != nil {
 		set("title", *p.Title)
 	}
-	if p.Year != nil {
-		set("year", *p.Year)
+	if p.Year.Set {
+		set("year", nullableArg(p.Year))
 	}
-	if p.Summary != nil {
-		set("summary", *p.Summary)
+	if p.Summary.Set {
+		set("summary", nullableArg(p.Summary))
 	}
 	if p.ShowID.Set {
 		set("show_id", nullableArg(p.ShowID))
@@ -219,6 +241,18 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, p UpdateItemParams) (I
 	}
 	if p.ClassifiedAt.Set {
 		set("classified_at", nullableArg(p.ClassifiedAt))
+	}
+	if p.TMDBID.Set {
+		set("tmdb_id", nullableArg(p.TMDBID))
+	}
+	if p.ArtAt.Set {
+		set("art_at", nullableArg(p.ArtAt))
+	}
+	if p.TMDBCheckedAt.Set {
+		set("tmdb_checked_at", nullableArg(p.TMDBCheckedAt))
+	}
+	if p.SummaryLocked != nil {
+		set("summary_locked", boolToInt(*p.SummaryLocked))
 	}
 	args = append(args, id)
 
@@ -448,12 +482,13 @@ type ListItemsOpts struct {
 
 func scanItem(row rowScanner) (Item, error) {
 	var it Item
-	var year, showID, season, episode, episodeEnd sql.NullInt64
-	var summary, deletedAt, showKey, classifiedAt sql.NullString
-	var needsCheck, locked int
+	var year, showID, season, episode, episodeEnd, tmdbID sql.NullInt64
+	var summary, deletedAt, showKey, classifiedAt, artAt, tmdbCheckedAt sql.NullString
+	var needsCheck, locked, summaryLocked int
 	err := row.Scan(&it.ID, &it.Type, &it.Title, &year, &summary,
 		&it.CreatedAt, &it.UpdatedAt, &deletedAt,
-		&showID, &season, &episode, &episodeEnd, &showKey, &needsCheck, &locked, &classifiedAt)
+		&showID, &season, &episode, &episodeEnd, &showKey, &needsCheck, &locked, &classifiedAt,
+		&tmdbID, &artAt, &tmdbCheckedAt, &summaryLocked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Item{}, ErrNotFound
 	}
@@ -471,6 +506,10 @@ func scanItem(row rowScanner) (Item, error) {
 	it.NeedsCheck = needsCheck != 0
 	it.Locked = locked != 0
 	it.ClassifiedAt = stringPtr(classifiedAt)
+	it.TMDBID = int64Ptr(tmdbID)
+	it.ArtAt = stringPtr(artAt)
+	it.TMDBCheckedAt = stringPtr(tmdbCheckedAt)
+	it.SummaryLocked = summaryLocked != 0
 	return it, nil
 }
 

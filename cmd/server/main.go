@@ -31,6 +31,7 @@ import (
 	"github.com/JeremyVun/MediaServer/internal/playback"
 	"github.com/JeremyVun/MediaServer/internal/semantic"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tmdb"
 	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 	"github.com/JeremyVun/MediaServer/internal/watcher"
 	webdist "github.com/JeremyVun/MediaServer/web"
@@ -48,11 +49,17 @@ func main() {
 
 func run() error {
 	configPath := flag.String("config", config.DefaultPath(), "path to config.yml")
+	tmdbTokenFrom := flag.String("tmdb-token-from", "", "take tmdb.read_access_token from this config file instead (scratch servers)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
+	}
+	if *tmdbTokenFrom != "" {
+		if cfg.TMDB.ReadAccessToken, err = config.LoadTMDBToken(*tmdbTokenFrom); err != nil {
+			return err
+		}
 	}
 
 	logger, closeLog, err := logging.Setup(cfg.LogDir(), cfg.Log.Level)
@@ -112,12 +119,22 @@ func run() error {
 		UserAgent: "media-server/" + version,
 		Log:       logger,
 	})
+	var tmdbClient *tmdb.Client
+	if cfg.TMDB.ReadAccessToken != "" {
+		tmdbClient = tmdb.New(tmdb.Options{
+			Token:     cfg.TMDB.ReadAccessToken,
+			UserAgent: "media-server/" + version,
+			Log:       logger,
+		})
+		logger.Info("TMDB movie metadata on")
+	}
 	sol := &semantic.Classifier{}
 	classifier := classify.New(classify.Options{
 		Store:  st,
 		Bus:    bus,
 		Log:    logger,
 		TVmaze: tvmazeClient,
+		TMDB:   tmdbClient,
 		Sol:    sol,
 		ArtDir: cfg.ArtDir(),
 		FFmpeg: cfg.Transcode.FFmpeg,
@@ -166,6 +183,7 @@ func run() error {
 		Jobs:          jobManager,
 		Classifier:    classifier,
 		TVmaze:        tvmazeClient,
+		TMDB:          tmdbClient,
 		Semantic:      sol,
 		RootLifecycle: watchManager,
 		Version:       version,

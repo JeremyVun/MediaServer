@@ -295,3 +295,52 @@ func TestShowMembersCoverTheirEpisodeRows(t *testing.T) {
 	}
 	l.expect("after removals", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "Zodiac")
 }
+
+func TestReorderLeavesHiddenRowsInPlace(t *testing.T) {
+	l := newCatalog(t)
+	for _, step := range []error{
+		l.s.AddItemToCollection(l.ctx, l.toWatch.ID, l.clip.ID),
+		l.s.AddShowToCollection(l.ctx, l.toWatch.ID, l.carrie.ID),
+		l.s.MarkItemTrashed(l.ctx, l.zodiac.ID),
+	} {
+		if step != nil {
+			t.Fatal(step)
+		}
+	}
+	l.expect("before", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "show:Andor", "show:Below", "clip")
+
+	if err := l.s.ReorderCollection(l.ctx, l.toWatch.ID, []store.CollectionRef{
+		{ShowID: l.below.ID}, {ItemID: l.clip.ID},
+	}); !errors.Is(err, store.ErrInvalidInput) {
+		t.Fatalf("a visible member left out: %v", err)
+	}
+	if err := l.s.ReorderCollection(l.ctx, l.toWatch.ID, []store.CollectionRef{
+		{ItemID: l.clip.ID}, {ShowID: l.below.ID}, {ShowID: l.andor.ID},
+	}); err != nil {
+		t.Fatalf("reorder without the trashed item and the emptied show: %v", err)
+	}
+	l.expect("reordered", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "clip", "show:Below", "show:Andor")
+
+	if err := l.s.MarkItemRestored(l.ctx, l.zodiac.ID); err != nil {
+		t.Fatal(err)
+	}
+	l.expect("restored after the row it followed", store.ListEntriesOpts{CollectionID: l.toWatch.ID},
+		"clip", "show:Below", "show:Andor", "Zodiac")
+	var clipOrder, carrieOrder int64
+	if err := l.s.DB().QueryRowContext(l.ctx, `SELECT
+		(SELECT sort_order FROM collection_items WHERE collection_id = ?1 AND item_id = ?2),
+		(SELECT sort_order FROM collection_items WHERE collection_id = ?1 AND show_id = ?3)`,
+		l.toWatch.ID, l.clip.ID, l.carrie.ID).Scan(&clipOrder, &carrieOrder); err != nil {
+		t.Fatal(err)
+	}
+	if carrieOrder != clipOrder+1 {
+		t.Errorf("emptied show row at %d, want straight after clip (%d) as before", carrieOrder, clipOrder)
+	}
+
+	if err := l.s.ReorderCollection(l.ctx, l.toWatch.ID, []store.CollectionRef{
+		{ItemID: l.zodiac.ID}, {ItemID: l.clip.ID}, {ShowID: l.below.ID}, {ShowID: l.andor.ID}, {ShowID: l.carrie.ID},
+	}); err != nil {
+		t.Fatalf("naming every row still works: %v", err)
+	}
+	l.expect("full reorder", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "Zodiac", "clip", "show:Below", "show:Andor")
+}

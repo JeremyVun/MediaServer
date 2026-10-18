@@ -23,9 +23,14 @@ type semanticSettings struct {
 	Available bool `json:"available"`
 }
 
+type tmdbSettings struct {
+	Configured bool `json:"configured"`
+}
+
 type settingsResponse struct {
 	HLSCache               hlsCacheSettings `json:"hls_cache"`
 	SemanticClassification semanticSettings `json:"semantic_classification"`
+	TMDB                   tmdbSettings     `json:"tmdb"`
 }
 
 type setSemanticRequest struct {
@@ -75,6 +80,7 @@ func (s *Server) writeSettings(w http.ResponseWriter, r *http.Request) {
 		Enabled:   value == "1",
 		Available: s.semantic != nil && s.semantic.Available(),
 	}
+	res.TMDB = tmdbSettings{Configured: s.tmdb.Configured()}
 	writeJSON(w, http.StatusOK, res)
 }
 

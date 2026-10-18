@@ -16,6 +16,7 @@ import (
 	"github.com/JeremyVun/MediaServer/internal/library"
 	"github.com/JeremyVun/MediaServer/internal/semantic"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tmdb"
 	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 )
 
@@ -27,9 +28,10 @@ const (
 	solWindowMinS = 30 * 60
 )
 
-// Scheduler queues show refreshes; the job manager implements it.
+// Scheduler queues show and movie refreshes; the job manager implements it.
 type Scheduler interface {
 	EnqueueShowRefresh(ctx context.Context, showID int64, runAt time.Time) error
+	EnqueueMovieRefresh(ctx context.Context, itemID int64, runAt time.Time) error
 }
 
 // Semantic is the Sol classifier (*semantic.Classifier in production).
@@ -42,6 +44,7 @@ type Options struct {
 	Bus    *events.Bus
 	Log    *slog.Logger
 	TVmaze *tvmaze.Client // shared process-wide: the throttle lives in it
+	TMDB   *tmdb.Client   // nil or tokenless: movies are never matched
 	Sol    Semantic       // nil disables semantic classification
 	ArtDir string         // {data_dir}/art
 	FFmpeg string         // binary that downscales oversized art; "" = ffmpeg on PATH
@@ -53,6 +56,7 @@ type Service struct {
 	bus       *events.Bus
 	log       *slog.Logger
 	tvmaze    *tvmaze.Client
+	tmdb      *tmdb.Client
 	sol       Semantic
 	artDir    string
 	ffmpeg    string
@@ -81,6 +85,7 @@ func New(opts Options) *Service {
 		bus:    opts.Bus,
 		log:    opts.Log,
 		tvmaze: opts.TVmaze,
+		tmdb:   opts.TMDB,
 		sol:    opts.Sol,
 		artDir: opts.ArtDir,
 		ffmpeg: opts.FFmpeg,
@@ -271,7 +276,10 @@ func (s *Service) Classify(ctx context.Context, itemID int64) error {
 		var stale staleLookup
 		if !errors.As(err, &stale) || attempt == maxStale {
 			s.fetchArt(ctx, art)
-			return err
+			if err != nil {
+				return err
+			}
+			return s.matchMovie(ctx, itemID)
 		}
 		if f.lookup, err = s.lookUp(ctx, stale.q); err != nil {
 			return err
@@ -458,7 +466,7 @@ func (s *Service) fileNonEpisode(ctx context.Context, item store.Item, g guess, 
 	return s.updateItem(ctx, item.ID, store.UpdateItemParams{
 		Type:         &g.typ,
 		Title:        &g.title,
-		Year:         g.year,
+		Year:         store.Nullable[int]{Set: true, Value: g.year},
 		ShowID:       store.SetNull[int64](),
 		Season:       store.SetNull[int](),
 		Episode:      store.SetNull[int](),
@@ -477,7 +485,7 @@ func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, par
 	p := store.UpdateItemParams{
 		Type:       &g.typ,
 		Title:      &g.title,
-		Year:       g.year,
+		Year:       store.Nullable[int]{Set: true, Value: g.year},
 		Season:     store.SetTo(g.season),
 		Episode:    store.SetTo(g.episode),
 		EpisodeEnd: store.SetNull[int](),
