@@ -25,7 +25,8 @@ function fixture(entries = [freshShow, startedShow, freshMovie, halfMovie, doneM
 
 const grid = (page: Page) => page.locator('[data-library-grid]')
 const continueRow = (page: Page) => page.locator('[data-continue-watching]')
-const toggle = (page: Page) => page.getByRole('button', { name: 'Unwatched' })
+const toggle = (page: Page) => page.getByRole('checkbox', { name: 'Unwatched' })
+const toggleLabel = (page: Page) => page.locator('label', { has: toggle(page) })
 const gridTitles = (page: Page) =>
   grid(page)
     .locator(':scope > *')
@@ -42,9 +43,9 @@ test('Unwatched narrows the grid to titles not started, composing with tabs and 
   const before = await rowLinks()
   expect(before.length).toBeGreaterThan(0)
 
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'false')
+  await expect(toggle(page)).not.toBeChecked()
   await toggle(page).click()
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toBeChecked()
   await expect(page).toHaveURL(/[?&]unwatched=1(&|$)/)
   await expect
     .poll(() => gridTitles(page))
@@ -63,7 +64,7 @@ test('Unwatched narrows the grid to titles not started, composing with tabs and 
 
   await tabs.getByRole('tab', { name: 'Movies' }).click()
   await expect.poll(() => gridTitles(page)).toEqual(['Play Alien'])
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toBeChecked()
 
   await tabs.getByRole('tab', { name: 'All' }).click()
   await page.getByRole('button', { name: 'Watchlist' }).click()
@@ -81,7 +82,7 @@ test('Unwatched narrows the grid to titles not started, composing with tabs and 
 test('a deep link restores the toggle, and the toggle stays neutral', async ({ page }) => {
   const log = await mockLibraryApi(page, fixture())
   await page.goto('/?type=movie&unwatched=1')
-  await expect(toggle(page)).toHaveAttribute('aria-pressed', 'true')
+  await expect(toggle(page)).toBeChecked()
   await expect.poll(() => gridTitles(page)).toEqual(['Play Alien'])
   expect(log.libraryRequests.some((p) => p.get('unwatched') === '1' && p.get('type') === 'movie')).toBe(true)
 
@@ -89,6 +90,23 @@ test('a deep link restores the toggle, and the toggle stays neutral', async ({ p
     selector.evaluate((el) => getComputedStyle(el.querySelector('span') ?? el).backgroundColor)
   const amber = await page.getByRole('button', { name: 'Upload', exact: true }).evaluate((el) => getComputedStyle(el).backgroundColor)
   expect(await fill(toggle(page))).not.toBe(amber)
+})
+
+test('B18: Unwatched is a checkbox whose label is a 44 px target with a check mark when checked', async ({ page }) => {
+  await mockLibraryApi(page, fixture())
+  await page.goto('/')
+  const box = await toggleLabel(page).boundingBox()
+  expect(box!.height).toBeGreaterThanOrEqual(44)
+  const mark = toggleLabel(page).locator('svg')
+  await expect(mark).toHaveCSS('opacity', '0')
+  await toggleLabel(page).getByText('Unwatched').click()
+  await expect(toggle(page)).toBeChecked()
+  await expect(page).toHaveURL(/[?&]unwatched=1(&|$)/)
+  await expect(mark).toHaveCSS('opacity', '1')
+  await toggle(page).focus()
+  await page.keyboard.press('Space')
+  await expect(toggle(page)).not.toBeChecked()
+  await expect(page).not.toHaveURL(/unwatched/)
 })
 
 test('nothing left unstarted reads plainly, and the toggle stays to turn it off', async ({ page }) => {
@@ -120,7 +138,7 @@ test.describe('on a phone', () => {
       await page.goto(url)
       await expect(grid(page)).toBeVisible()
       const tabBox = await page.getByRole('tab', { name: 'All' }).boundingBox()
-      const toggleBox = await toggle(page).boundingBox()
+      const toggleBox = await toggleLabel(page).boundingBox()
       const selectBox = await page.getByRole('button', { name: 'Select', exact: true }).boundingBox()
       expect(toggleBox!.y).toBe(tabBox!.y)
       expect(selectBox!.y + selectBox!.height / 2).toBeCloseTo(tabBox!.y + tabBox!.height / 2, 0)

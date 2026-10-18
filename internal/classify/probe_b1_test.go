@@ -310,10 +310,10 @@ func TestProbe_Learning_TableRowsWriteExactly(t *testing.T) {
 			got := after.aliases[k]
 			want := was
 			if was.ShowID == showA {
-				want.ShowID = showL
+				want.ShowID, want.Source = showL, store.AliasOwner
 			}
 			if got != want {
-				t.Errorf("alias %q = %+v, want %+v (repointed, source kept)", k, got, want)
+				t.Errorf("alias %q = %+v, want %+v (repointed as owner aliases, ruling B17.3)", k, got, want)
 			}
 		}
 		for id, was := range before.items {
@@ -324,8 +324,8 @@ func TestProbe_Learning_TableRowsWriteExactly(t *testing.T) {
 	})
 }
 
-// probe (RULING NEEDED, characterization): an item PATCH that re-sends the item's current show_id is treated as a move — it locks the item and writes an owner alias.
-func TestProbe_RulingNeeded_UnchangedShowIDIsAMove(t *testing.T) {
+// probe (ruling B17.2): an item PATCH that re-sends the item's current show_id is not a move: no lock, no alias, so B7.4 still runs.
+func TestProbe_Ruled_UnchangedShowIDIsNotAMove(t *testing.T) {
 	h := newHarness(t)
 	lionessShows(h)
 	first := h.classify(h.item("Lioness.S03E01.mkv", 3000).ID)
@@ -334,34 +334,52 @@ func TestProbe_RulingNeeded_UnchangedShowIDIsAMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, alias := h.get(first.ID), h.alias("lioness")
-	t.Logf("re-sending show_id %d: item locked=%v needs_check=%v; alias %q source=%s", show, got.Locked, got.NeedsCheck, alias.Key, alias.Source)
+	if got.Locked || got.NeedsCheck != first.NeedsCheck || alias.Source != store.AliasAuto {
+		t.Errorf("re-sending show_id %d: item locked=%v needs_check=%v (was %v); alias source=%s, want unchanged",
+			show, got.Locked, got.NeedsCheck, first.NeedsCheck, alias.Source)
+	}
 	later := h.classify(h.item("Lioness.2023.S03E02.mkv", 3000).ID)
-	t.Logf("later confident arrival: show %d tvmaze=%v (B7.4 re-match %s)", *later.ShowID, h.show(show).TVmazeID,
-		map[bool]string{true: "blocked by the new owner alias", false: "ran"}[h.show(show).TVmazeID == nil])
+	if *later.ShowID != show || derefInt64(h.show(show).TVmazeID) != 50415 {
+		t.Errorf("later confident arrival: show %d tvmaze=%v, want show %d matched to 50415", *later.ShowID, h.show(show).TVmazeID, show)
+	}
 }
 
-// probe (RULING NEEDED, characterization): an owner's year edit is not an identity edit, so a pending item's classify overwrites it with the parsed year (B10.1).
-func TestProbe_RulingNeeded_OwnerYearEditBeforeClassify(t *testing.T) {
+// probe (ruling B17.5): an owner's year edit locks the item, so a pending item's classify keeps it (B10.1 never wipes it).
+func TestProbe_Ruled_OwnerYearEditBeforeClassify(t *testing.T) {
 	h := newHarness(t)
 	item := h.item("Blade.Runner.mkv", 7000)
 	if _, err := h.svc.EditItem(h.ctx, item.ID, ItemEdit{Year: ptr(1982)}); err != nil {
 		t.Fatal(err)
 	}
-	got := h.classify(item.ID)
-	t.Logf("owner set year 1982 before classify; after classify year=%v locked=%v", got.Year, got.Locked)
+	h.svc.Classify(h.ctx, item.ID)
+	if got := h.get(item.ID); got.Year == nil || *got.Year != 1982 || !got.Locked {
+		t.Errorf("owner set year 1982 before classify; after classify year=%v locked=%v, want 1982 and locked", got.Year, got.Locked)
+	}
 }
 
-// probe (RULING NEEDED, characterization): a key with a country code whose only name match is from another country is matched confidently (B4 vs B7.2).
-func TestProbe_RulingNeeded_SingleNameMatchFromAnotherCountry(t *testing.T) {
+// probe (ruling B17.4): a key with a country code whose only name match is from another country is weak.
+func TestProbe_Ruled_SingleNameMatchFromAnotherCountry(t *testing.T) {
 	h := newHarness(t)
 	h.tv.add(tvShow{id: 9, name: "Euphoria", premiered: "2012-01-01", network: "HOT3", country: "IL"}, "euphoria us", "euphoria")
 	got := h.classify(h.item("Euphoria.US.S01E01.mkv", 3300).ID)
-	show := h.show(*got.ShowID)
-	t.Logf("Euphoria.US with only the Israeli Euphoria on TVmaze: show tvmaze=%d needs_check=%v", derefInt64(show.TVmazeID), show.NeedsCheck)
+	if show := h.show(*got.ShowID); show.TVmazeID != nil || !show.NeedsCheck {
+		t.Errorf("Euphoria.US with only the Israeli Euphoria on TVmaze: show tvmaze=%d needs_check=%v, want unmatched and flagged",
+			derefInt64(show.TVmazeID), show.NeedsCheck)
+	}
 }
 
-// probe (RULING NEEDED, characterization): an owner merge into a flagged unmatched show leaves the merged aliases auto, so the next arrival re-matches the owner's merge target (B7.4).
-func TestProbe_RulingNeeded_OwnerMergeTargetRematched(t *testing.T) {
+// probe (ruling B17.4): a sole name match with no country still falls back to B4.
+func TestProbe_Ruled_SingleNameMatchWithNoCountry(t *testing.T) {
+	h := newHarness(t)
+	h.tv.add(tvShow{id: 9, name: "Euphoria", premiered: "2019-01-01"}, "euphoria us", "euphoria")
+	got := h.classify(h.item("Euphoria.US.S01E01.mkv", 3300).ID)
+	if show := h.show(*got.ShowID); derefInt64(show.TVmazeID) != 9 {
+		t.Errorf("Euphoria.US with one country-less Euphoria: show tvmaze=%d, want 9", derefInt64(show.TVmazeID))
+	}
+}
+
+// probe (ruling B17.3): an owner merge into a flagged unmatched show marks the merged aliases owner, so no later arrival re-matches the owner's merge target.
+func TestProbe_Ruled_OwnerMergeTargetNotRematched(t *testing.T) {
 	h := newHarness(t)
 	lionessShows(h)
 	first := h.classify(h.item("Lioness.S03E01.mkv", 3000).ID)
@@ -375,17 +393,22 @@ func TestProbe_RulingNeeded_OwnerMergeTargetRematched(t *testing.T) {
 	}
 	h.classify(h.item("Lioness.2023.S03E02.mkv", 3000).ID)
 	got := h.show(target.ID)
-	t.Logf("after the owner merged into %q, a later arrival left it: title=%q tvmaze=%d needs_check=%v alias source=%s",
-		target.Title, got.Title, derefInt64(got.TVmazeID), got.NeedsCheck, h.alias("lioness").Source)
+	if got.Title != target.Title || got.TVmazeID != nil || !got.NeedsCheck || h.alias("lioness").Source != store.AliasOwner {
+		t.Errorf("after the owner merged into %q, a later arrival left it: title=%q tvmaze=%d needs_check=%v alias source=%s",
+			target.Title, got.Title, derefInt64(got.TVmazeID), got.NeedsCheck, h.alias("lioness").Source)
+	}
 }
 
-// probe (RULING NEEDED, characterization): the backfill lock heuristic compares title and type only, so a legacy item whose year the owner set loses it to B10.1's parsed year.
-func TestProbe_RulingNeeded_LegacyOwnerYearLost(t *testing.T) {
+// probe (ruling B17.5): the backfill lock heuristic compares the year too, so a legacy item whose year the owner set keeps it.
+func TestProbe_Ruled_LegacyOwnerYearKept(t *testing.T) {
 	h := newHarness(t, withClock(time.Hour))
 	if err := h.svc.MarkLegacyCutoff(h.ctx); err != nil {
 		t.Fatal(err)
 	}
 	item := h.itemAs("Blade.Runner.mkv", 7000, store.NewItem{Type: "video", Title: "Blade Runner", Year: ptr(1982)})
 	got := h.classify(item.ID)
-	t.Logf("legacy item with an owner-set year 1982 (v1 parsed none): after classify year=%v locked=%v type=%s", got.Year, got.Locked, got.Type)
+	if got.Year == nil || *got.Year != 1982 || !got.Locked {
+		t.Errorf("legacy item with an owner-set year 1982 (v1 parsed none): after classify year=%v locked=%v type=%s, want 1982 and locked",
+			got.Year, got.Locked, got.Type)
+	}
 }

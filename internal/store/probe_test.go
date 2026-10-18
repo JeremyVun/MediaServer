@@ -392,8 +392,8 @@ func TestProbe_Collections_ReorderMixedEntries(t *testing.T) {
 	}
 }
 
-// probe (RULING NEEDED, characterization): item_count counts collection rows (each episode row counts), while the grid shows one card per show.
-func TestProbe_RulingNeeded_CollectionItemCountVsGridCards(t *testing.T) {
+// probe (ruling B17.6): item_count counts the cards the collection page shows, so a show and its member episodes count once.
+func TestProbe_Ruled_CollectionItemCountIsGridCards(t *testing.T) {
 	f := newFixture(t)
 	coll, err := f.s.CreateCollection(f.ctx, "euphoria")
 	if err != nil {
@@ -417,7 +417,9 @@ func TestProbe_RulingNeeded_CollectionItemCountVsGridCards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("a collection holding a show and 3 of its episodes: item_count = %d, grid cards = %d", colls[0].ItemCount, total)
+	if colls[0].ItemCount != total || total != 1 {
+		t.Errorf("a collection holding a show and 3 of its episodes: item_count = %d, grid cards = %d, want 1 and 1", colls[0].ItemCount, total)
+	}
 }
 
 // probe: merging a show into one that shares its collection leaves exactly one row there, and episode rows keep membership (B3).
@@ -435,7 +437,7 @@ func TestProbe_Collections_MergeKeepsOneRow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := f.s.MergeShow(f.ctx, from.ID, into.ID); err != nil {
+	if _, err := f.s.MergeShow(f.ctx, from.ID, into.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	var rows int

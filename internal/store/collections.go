@@ -40,17 +40,19 @@ func (s *Store) CreateCollection(ctx context.Context, name string) (Collection, 
 	return s.GetCollection(ctx, id)
 }
 
-// ListCollections counts live item members plus show members that still
-// have a live episode. A show member's thumbnail is its first episode.
+// ListCollections counts the cards each collection page shows (ruling B17):
+// live members outside a show, plus each show with a live episode that is a
+// member itself or through an episode. A show member's thumbnail is its
+// first episode.
 func (s *Store) ListCollections(ctx context.Context) ([]CollectionSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT c.id, c.name, c.created_at,
 		       (SELECT COUNT(*) FROM collection_items ci
 		        JOIN media_items mi ON mi.id = ci.item_id
-		        WHERE ci.collection_id = c.id AND mi.deleted_at IS NULL)
-		     + (SELECT COUNT(*) FROM collection_items ci
-		        WHERE ci.collection_id = c.id AND ci.show_id IS NOT NULL
-		          AND EXISTS (SELECT 1 FROM media_items mi WHERE mi.show_id = ci.show_id AND mi.deleted_at IS NULL))
+		        WHERE ci.collection_id = c.id AND mi.deleted_at IS NULL AND mi.show_id IS NULL)
+		     + (SELECT COUNT(*) FROM shows sh
+		        WHERE EXISTS (SELECT 1 FROM media_items e WHERE e.show_id = sh.id AND e.deleted_at IS NULL)
+		          AND EXISTS (SELECT 1 FROM collection_items ci WHERE ci.collection_id = c.id AND `+showMemberSQL+`))
 		       AS item_count
 		FROM collections c
 		ORDER BY c.name COLLATE NOCASE, c.id`)

@@ -70,8 +70,8 @@ func (s *Service) refreshOnce(ctx context.Context, showID int64) (*artJob, error
 		return nil, err
 	}
 	if show.TVmazeID == nil {
-		if !awaitingRematch(show) {
-			return nil, nil
+		if awaiting, err := s.awaitingRematch(ctx, show); err != nil || !awaiting {
+			return nil, err
 		}
 		q, err := s.rematchQuery(ctx, show)
 		if err != nil {
@@ -143,11 +143,17 @@ func (s *Service) tvmazeFailure(ctx context.Context, showID int64, err error) er
 }
 
 // awaitingRematch: an unmatched show formed while TVmaze was down, never
-// settled since.
-func awaitingRematch(show store.Show) bool {
-	return show.TVmazeID == nil && show.RefreshedAt == nil && show.NeedsCheck
+// settled or touched by the owner since.
+func (s *Service) awaitingRematch(ctx context.Context, show store.Show) (bool, error) {
+	if show.TVmazeID != nil || show.RefreshedAt != nil {
+		return false, nil
+	}
+	touched, err := s.ownerTouched(ctx, show)
+	return !touched, err
 }
 
+// rematchQuery asks about the show's first numbered episode, with its parsed
+// title and duration for the tie-breaks of ruling B11.
 func (s *Service) rematchQuery(ctx context.Context, show store.Show) (showQuery, error) {
 	q := showQuery{name: show.Title, key: library.ShowKey(show.Title), year: show.Year}
 	items, err := s.store.ListItemsByShow(ctx, show.ID)
@@ -155,10 +161,16 @@ func (s *Service) rematchQuery(ctx context.Context, show store.Show) (showQuery,
 		return showQuery{}, err
 	}
 	for _, item := range items {
-		if item.Episode != nil {
-			q.season, q.episode, _ = numbers(item)
-			break
+		if item.Episode == nil {
+			continue
 		}
+		q.season, q.episode, _ = numbers(item)
+		relPath, durationS, err := s.fileOf(ctx, item.ID)
+		if err != nil {
+			return showQuery{}, err
+		}
+		q.episodeTitle, q.durationS = library.ParsePath(relPath).EpisodeTitle, durationS
+		break
 	}
 	return q, nil
 }
@@ -175,7 +187,10 @@ func (s *Service) rematch(ctx context.Context, showID int64, lk *lookup) (*artJo
 	if err != nil {
 		return nil, err
 	}
-	if !awaitingRematch(show) {
+	if awaiting, err := s.awaitingRematch(ctx, show); err != nil || !awaiting {
+		if err != nil {
+			return nil, err
+		}
 		return nil, staleLookup{}
 	}
 	q, err := s.rematchQuery(ctx, show)
@@ -209,8 +224,17 @@ func (s *Service) adopt(ctx context.Context, show store.Show, lk *lookup) (store
 	id := int64(lk.m.result.ID)
 	local, err := s.store.GetShowByTVmazeID(ctx, id)
 	if err == nil {
+		if _, lockedItem, err := s.store.ShowOwnerMarks(ctx, show.ID); err != nil || lockedItem {
+			if err != nil {
+				return store.Show{}, nil, err
+			}
+			// Automation never moves a locked item between shows (ruling B17).
+			s.log.Info("classify: matched show already local, kept apart for its locked items", "show_id", show.ID, "into", local.ID)
+			show, err := s.store.UpdateShow(ctx, show.ID, store.UpdateShowParams{RefreshedAt: store.SetTo(s.stamp())})
+			return show, nil, err
+		}
 		s.log.Info("classify: matched show already local, merging", "show_id", show.ID, "into", local.ID)
-		if err := s.merge(ctx, show.ID, local.ID); err != nil {
+		if err := s.merge(ctx, show.ID, local.ID, false); err != nil {
 			return store.Show{}, nil, err
 		}
 		local, err = s.store.GetShow(ctx, local.ID)

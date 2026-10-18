@@ -108,7 +108,7 @@ func TestMergeShowsRepointsAliases(t *testing.T) {
 	if merged.ID != into {
 		t.Fatalf("merged = %+v", merged)
 	}
-	for key, source := range map[string]string{"star wars andor": store.AliasAuto, "andor tv": store.AliasOwner, "andor": store.AliasAuto} {
+	for key, source := range map[string]string{"star wars andor": store.AliasOwner, "andor tv": store.AliasOwner, "andor": store.AliasAuto} {
 		if a := h.alias(key); a.ShowID != into || a.Source != source {
 			t.Fatalf("alias %q = %+v, want %s alias to %d", key, a, source, into)
 		}

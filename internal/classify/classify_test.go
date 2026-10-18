@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/JeremyVun/MediaServer/internal/events"
+	"github.com/JeremyVun/MediaServer/internal/library"
 	"github.com/JeremyVun/MediaServer/internal/semantic"
 	"github.com/JeremyVun/MediaServer/internal/store"
 )
@@ -386,7 +387,8 @@ func TestBackfillLockHeuristic(t *testing.T) {
 	}
 	h.tv.add(andorShow(), "andor")
 	legacy := func(relPath string, durationS float64, typ, title string) store.Item {
-		return h.itemAs(relPath, durationS, store.NewItem{Type: typ, Title: title})
+		_, _, v1Year := library.LegacyTitle(relPath)
+		return h.itemAs(relPath, durationS, store.NewItem{Type: typ, Title: title, Year: v1Year})
 	}
 
 	untouched := h.classify(legacy("Big.Buck.Bunny.(2008).mp4", 600, "video", "Big Buck Bunny").ID)

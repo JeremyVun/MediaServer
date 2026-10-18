@@ -342,18 +342,22 @@ func lockedQuery(item store.Item, parsed library.Parsed, durationS float64) (sho
 }
 
 // ownerEdited is the backfill lock heuristic: an item from before the
-// upgrade whose title or type no longer matches what the old parser wrote
-// was edited by the owner, so it is locked and keeps its values.
+// upgrade whose title, type or year no longer matches what the old parser
+// wrote was edited by the owner, so it is locked and keeps its values.
 func (s *Service) ownerEdited(ctx context.Context, item store.Item, relPath string) (bool, error) {
 	if legacy, err := s.legacy(ctx, item); err != nil || !legacy {
 		return false, err
 	}
-	v1Type, v1Title, _ := library.LegacyTitle(relPath)
-	if item.Title == v1Title && item.Type == v1Type {
+	v1Type, v1Title, v1Year := library.LegacyTitle(relPath)
+	if item.Title == v1Title && item.Type == v1Type && sameYear(item.Year, v1Year) {
 		return false, nil
 	}
 	s.log.Info("classify: keeping owner edit", "item_id", item.ID, "title", item.Title, "type", item.Type)
 	return true, nil
+}
+
+func sameYear(a, b *int) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
 }
 
 // legacy reports whether item predates the shows upgrade (MarkLegacyCutoff).
@@ -533,7 +537,10 @@ func (s *Service) showFor(ctx context.Context, q showQuery, lk *lookup) (store.S
 	alias, err := s.store.GetShowAlias(ctx, q.key)
 	if err == nil {
 		show, err := s.store.GetShow(ctx, alias.ShowID)
-		if err != nil || !upgradable(alias, show) {
+		if err != nil {
+			return show, false, nil, err
+		}
+		if up, err := s.upgradable(ctx, alias, show); err != nil || !up {
 			return show, false, nil, err
 		}
 		if !lk.answers(q) {
@@ -580,10 +587,23 @@ func (s *Service) showFor(ctx context.Context, q showQuery, lk *lookup) (store.S
 }
 
 // upgradable: a later arrival may still match a flagged unmatched show its
-// auto alias points at (ruling B7). An owner alias, or a show the owner
-// settled, never is.
-func upgradable(alias store.ShowAlias, show store.Show) bool {
-	return alias.Source == store.AliasAuto && show.TVmazeID == nil && show.NeedsCheck
+// auto alias points at (ruling B7), unless the owner touched it (B17).
+func (s *Service) upgradable(ctx context.Context, alias store.ShowAlias, show store.Show) (bool, error) {
+	if alias.Source != store.AliasAuto || show.TVmazeID != nil {
+		return false, nil
+	}
+	touched, err := s.ownerTouched(ctx, show)
+	return !touched, err
+}
+
+// ownerTouched: the owner taught an alias pointing at the show, renamed it,
+// or settled its Check mark, so automation never re-matches it (ruling B17).
+func (s *Service) ownerTouched(ctx context.Context, show store.Show) (bool, error) {
+	if show.TitleLocked || !show.NeedsCheck {
+		return true, nil
+	}
+	ownerAlias, _, err := s.store.ShowOwnerMarks(ctx, show.ID)
+	return ownerAlias, err
 }
 
 // upgrade lets a later arrival match a flagged unmatched show, so arrival

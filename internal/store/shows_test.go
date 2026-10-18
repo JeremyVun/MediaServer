@@ -273,13 +273,13 @@ func TestMergeShow(t *testing.T) {
 		}
 	}
 
-	if _, err := f.s.MergeShow(f.ctx, from.ID, from.ID); !errors.Is(err, store.ErrInvalidInput) {
+	if _, err := f.s.MergeShow(f.ctx, from.ID, from.ID, false); !errors.Is(err, store.ErrInvalidInput) {
 		t.Fatalf("self merge: %v", err)
 	}
-	if _, err := f.s.MergeShow(f.ctx, from.ID, 999); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.s.MergeShow(f.ctx, from.ID, 999, false); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("merge into missing: %v", err)
 	}
-	removed, err := f.s.MergeShow(f.ctx, from.ID, into.ID)
+	removed, err := f.s.MergeShow(f.ctx, from.ID, into.ID, false)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
@@ -313,6 +313,34 @@ func TestMergeShow(t *testing.T) {
 	}
 	if summary.EpisodeCount != 2 {
 		t.Fatalf("live episode count = %d, want 2", summary.EpisodeCount)
+	}
+}
+
+func TestOwnerMergeMakesRepointedAliasesOwner(t *testing.T) {
+	f := newFixture(t)
+	from, into := f.show("Lioness"), f.show("Special Ops: Lioness")
+	f.episode(from, 1, 1, "One")
+	f.episode(into, 1, 2, "Two")
+	if _, err := f.s.PutShowAlias(f.ctx, "lioness", from.ID, store.AliasAuto); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.PutShowAlias(f.ctx, "special ops lioness", into.ID, store.AliasAuto); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.MergeShow(f.ctx, from.ID, into.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	aliases, _ := f.s.ListShowAliases(f.ctx, into.ID)
+	want := []store.ShowAlias{
+		{Key: "lioness", ShowID: into.ID, Source: store.AliasOwner},
+		{Key: "special ops lioness", ShowID: into.ID, Source: store.AliasAuto},
+	}
+	if !reflect.DeepEqual(aliases, want) {
+		t.Fatalf("aliases = %+v, want %+v", aliases, want)
+	}
+	ownerAlias, lockedItem, err := f.s.ShowOwnerMarks(f.ctx, into.ID)
+	if err != nil || !ownerAlias || lockedItem {
+		t.Fatalf("ShowOwnerMarks = %v, %v, %v; want an owner alias and no locked item", ownerAlias, lockedItem, err)
 	}
 }
 

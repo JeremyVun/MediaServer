@@ -21,6 +21,24 @@ import (
 	"time"
 )
 
+// lockedBuffer is the server's output, read while the server still writes.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 const probeToken = "probe-dummy-tmdb-token-91c4e7"
 
 // probeProxy stands in for the outside world: every outbound HTTP(S)
@@ -117,7 +135,7 @@ type probeRun struct {
 	t       *testing.T
 	base    string
 	dataDir string
-	output  *bytes.Buffer
+	output  *lockedBuffer
 	proxy   *probeProxy
 	bodies  []string
 }
@@ -183,7 +201,7 @@ log:
 		t.Fatal(err)
 	}
 
-	output := &bytes.Buffer{}
+	output := &lockedBuffer{}
 	cmd := exec.Command(bin, append([]string{"--config", configPath}, extraArgs...)...)
 	cmd.Env = append(os.Environ(),
 		"HTTPS_PROXY=http://"+proxy.ln.Addr().String(),

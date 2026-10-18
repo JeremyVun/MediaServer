@@ -1,6 +1,7 @@
-import { Suspense, lazy, useEffect } from 'react'
+import { Suspense, lazy, useEffect, useLayoutEffect } from 'react'
 import { Route, Routes } from 'react-router'
 import { LibraryPage } from './features/library/LibraryPage.tsx'
+import { holdPreloadForPlayer, preloadRoutes, releasePreloadForPlayer } from './lib/routePreload.ts'
 
 // Every route but the library is its own chunk so the first paint ships only
 // the home screen. The rest are fetched a moment later in the background, so
@@ -23,11 +24,15 @@ const PRELOAD_DELAY_MS = 2_000
 
 export default function App() {
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      for (const load of [loadPlayer, loadShow, loadItemDetail, loadCollections, loadSettings]) {
-        void load().catch(() => undefined)
-      }
-    }, PRELOAD_DELAY_MS)
+    const timer = window.setTimeout(
+      () =>
+        preloadRoutes(() => {
+          for (const load of [loadPlayer, loadShow, loadItemDetail, loadCollections, loadSettings]) {
+            void load().catch(() => undefined)
+          }
+        }),
+      PRELOAD_DELAY_MS,
+    )
     return () => window.clearTimeout(timer)
   }, [])
 
@@ -37,13 +42,27 @@ export default function App() {
         <Route path="/" element={<LibraryPage />} />
         <Route path="/items/:id" element={<ItemDetailPage />} />
         <Route path="/shows/:id" element={<ShowPage />} />
-        <Route path="/watch/:id" element={<PlayerPage />} />
+        <Route path="/watch/:id" element={<WatchRoute />} />
         <Route path="/collections" element={<CollectionsPage />} />
         <Route path="/collections/:id" element={<CollectionsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         {/* Storybook-less demo of the ui/ primitives in both themes. */}
         <Route path="/demo" element={<DemoPage />} />
       </Routes>
+    </Suspense>
+  )
+}
+
+// Holds the preload from the route itself, since the player's own chunk may
+// still be loading when the preload timer fires.
+function WatchRoute() {
+  useLayoutEffect(() => {
+    holdPreloadForPlayer()
+    return releasePreloadForPlayer
+  }, [])
+  return (
+    <Suspense fallback={null}>
+      <PlayerPage />
     </Suspense>
   )
 }

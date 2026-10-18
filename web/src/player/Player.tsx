@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
@@ -49,6 +50,7 @@ import { mediaSessionMetadata } from './mediaSession.ts'
 import { qualityAfterItemChange, readStoredQuality, resolveQualityLabel, writeStoredQuality } from './quality.ts'
 import { Clock, SeekBar } from './SeekBar.tsx'
 import { usePlaybackSession } from './usePlaybackSession.ts'
+import { releasePreloadForPlayer } from '../lib/routePreload.ts'
 import {
   cardMode,
   inIntro,
@@ -277,6 +279,19 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const [ended, setEnded] = useState(false)
   const [episodesMounted, setEpisodesMounted] = useState(false)
   const [episodesOpen, setEpisodesOpen] = useState(false)
+  // The popover opens itself when it mounts, so only a tap may mount it: it
+  // unmounts while the next item loads and must not reopen after a pick.
+  if (showID == null && episodesMounted) {
+    setEpisodesMounted(false)
+    setEpisodesOpen(false)
+  }
+  // A cached popover chunk mounts within the tap, and the trigger's native
+  // popover toggle would then close it straight away.
+  const mountEpisodes = (event: ReactMouseEvent) => {
+    if (episodesMounted) return
+    event.preventDefault()
+    setEpisodesMounted(true)
+  }
   // Bottom offset that keeps Skip intro and the Next card clear of the
   // control bar while it shows.
   const [lift, setLift] = useState<number | null>(null)
@@ -872,6 +887,9 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
   const qualityLabel = resolveQualityLabel(resolvedQuality, qualities, playingHeight)
   const loading = item.isPending || session.isPending
   const error = item.isError || session.isError || videoError
+  useEffect(() => {
+    if (error) releasePreloadForPlayer()
+  }, [error])
 
   return (
     <main
@@ -917,7 +935,10 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
           setEnded(false)
         }}
         onWaiting={showBuffering}
-        onPlaying={clearBuffering}
+        onPlaying={() => {
+          clearBuffering()
+          releasePreloadForPlayer()
+        }}
         onCanPlay={clearBuffering}
         onResize={(e) => setPlayingHeight(e.currentTarget.videoHeight)}
         onEmptied={() => {
@@ -1041,7 +1062,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
             aria-label="Episodes"
             aria-haspopup="dialog"
             aria-expanded={episodesOpen}
-            onClick={() => setEpisodesMounted(true)}
+            onClick={mountEpisodes}
             className={[
               '-my-3 -mr-2 inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-primary sm:hidden',
               episodesOpen ? 'bg-accent-subtle' : '',
@@ -1248,7 +1269,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
               aria-label="Episodes"
               aria-haspopup="dialog"
               aria-expanded={episodesOpen}
-              onClick={() => setEpisodesMounted(true)}
+              onClick={mountEpisodes}
               className={[
                 'text-primary hidden h-11 cursor-pointer items-center gap-2 rounded-md px-3 text-sm sm:inline-flex',
                 episodesOpen ? 'bg-accent-subtle' : 'hover:bg-accent-subtle',

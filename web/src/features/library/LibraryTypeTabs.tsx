@@ -1,3 +1,4 @@
+import { Check } from 'lucide-react'
 import type { LibraryType } from '../../lib/searchParams.ts'
 
 const TABS: { value: LibraryType; label: string }[] = [
@@ -40,26 +41,26 @@ export function LibraryTypeTabs({
   )
 }
 
-/** Neutral on purpose: the screen's one amber accent stays on Upload and
-    the active collection chip. */
-export function UnwatchedToggle({ pressed, onChange }: { pressed: boolean; onChange: (next: boolean) => void }) {
+/** A checkbox, so it reads as combining with a tab rather than as a fourth
+    one (ruling B18). Neutral on purpose: the screen's one amber accent stays
+    on Upload and the active collection chip. */
+export function UnwatchedCheckbox({ checked, onChange }: { checked: boolean; onChange: (next: boolean) => void }) {
   return (
-    <button
-      type="button"
-      aria-pressed={pressed}
-      onClick={() => onChange(!pressed)}
-      className="group -my-3 inline-flex h-11 shrink-0 cursor-pointer items-center"
-    >
-      <span
-        className={[
-          'inline-flex h-7 items-center rounded-full border px-3 whitespace-nowrap',
-          pressed
-            ? 'bg-primary border-primary text-canvas font-medium'
-            : 'border-line-strong text-secondary group-hover:text-primary',
-        ].join(' ')}
-      >
-        Unwatched
+    <label className="-my-3 inline-flex h-11 shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-secondary hover:text-primary has-checked:text-primary">
+      <span className="relative inline-flex size-4 shrink-0">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.currentTarget.checked)}
+          className="peer border-line-strong checked:bg-primary checked:border-primary size-4 cursor-pointer appearance-none rounded-[4px] border"
+        />
+        <Check
+          aria-hidden
+          strokeWidth={3}
+          className="text-canvas pointer-events-none absolute inset-0 m-auto size-3 opacity-0 peer-checked:opacity-100"
+        />
       </span>
-    </button>
+      Unwatched
+    </label>
   )
 }

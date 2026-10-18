@@ -9,13 +9,15 @@ import {
 } from 'react'
 import { useQueryClient, type InfiniteData, type QueryClient, type QueryKey } from '@tanstack/react-query'
 import { useToast } from '../ui/index.ts'
-import type { LibraryEntryFilters, LibraryFilters } from './queries.ts'
+import { ApiError } from './client.ts'
+import { showQuery, type LibraryEntryFilters, type LibraryFilters } from './queries.ts'
 import type {
   Health,
   ItemList,
   ItemSummary,
   LibraryList,
   RootInfo,
+  ShowSummary,
   UploadCompleteEvent,
   UploadProgressEvent,
 } from './types.ts'
@@ -66,9 +68,7 @@ export function SSEProvider({ children }: { children: ReactNode }) {
     const refreshItem = (id: number) => {
       void queryClient.invalidateQueries({ queryKey: ['item', id], refetchType: 'active' })
     }
-    // Show events carry only an id, so the grid heals by refetching.
     const refreshShow = (id: number) => {
-      void queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' })
       void queryClient.invalidateQueries({ queryKey: ['continue-watching'], refetchType: 'active' })
       void queryClient.invalidateQueries({ queryKey: ['show', id], refetchType: 'active' })
     }
@@ -119,17 +119,28 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['continue-watching'], refetchType: 'active' })
     })
 
-    for (const type of ['show.added', 'show.updated'] as const) {
-      source.addEventListener(type, (event) => {
-        const payload = parseEventData<RemovedPayload>(event)
-        if (payload) refreshShow(payload.id)
-      })
-    }
+    // Show events carry only an id. A new show needs its place in the grid,
+    // so the grid refetches; otherwise the one card is patched or dropped in
+    // place, like items, so a progress save never refetches every page.
+    source.addEventListener('show.added', (event) => {
+      const payload = parseEventData<RemovedPayload>(event)
+      if (!payload) return
+      void queryClient.invalidateQueries({ queryKey: ['library'], refetchType: 'active' })
+      refreshShow(payload.id)
+    })
 
+    source.addEventListener('show.updated', (event) => {
+      const payload = parseEventData<RemovedPayload>(event)
+      if (!payload) return
+      refreshShow(payload.id)
+      void patchShowInLibrary(queryClient, payload.id)
+    })
+
+    // An open show page refetches into its "not found" state.
     source.addEventListener('show.removed', (event) => {
       const payload = parseEventData<RemovedPayload>(event)
       if (!payload) return
-      queryClient.removeQueries({ queryKey: ['show', payload.id] })
+      removeShowFromLibrary(queryClient, payload.id)
       refreshShow(payload.id)
     })
 
@@ -315,17 +326,13 @@ function patchItemInLibrary(queryClient: QueryClient, item: ItemSummary) {
     const filters = query.queryKey[1] as LibraryEntryFilters | undefined
     const data = query.state.data as InfiniteData<LibraryList> | undefined
     if (!filters || !data) continue
-    const narrowed = filters.collection_id != null || !!filters.uncollected || !!filters.type
     const matches =
       item.show == null &&
       (filters.type === 'show' ? false : filters.type === 'movie' ? item.type === 'movie' : true) &&
-      (filters.collection_id != null
-        ? item.collection_ids.includes(filters.collection_id)
-        : filters.uncollected
-          ? item.collection_ids.length === 0
-          : true)
+      inCollectionScope(filters, item.collection_ids) &&
+      (!filters.unwatched || !(item.progress && (item.progress.completed || item.progress.position_s > 0)))
     if (!hasLibraryItem(data, item.id)) {
-      if (matches && narrowed) {
+      if (matches && narrowed(filters)) {
         void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true, refetchType: 'active' })
       }
       continue
@@ -365,6 +372,98 @@ function removeItemFromLibrary(queryClient: QueryClient, id: number) {
           ...page,
           total: Math.max(0, page.total - 1),
           entries: page.entries.filter((e) => !(e.kind === 'item' && e.id === id)),
+        })),
+      }
+    })
+  }
+}
+
+function narrowed(filters: LibraryEntryFilters) {
+  return filters.collection_id != null || !!filters.uncollected || !!filters.type || !!filters.unwatched
+}
+
+function inCollectionScope(filters: LibraryEntryFilters, collectionIDs: number[]) {
+  if (filters.collection_id != null) return collectionIDs.includes(filters.collection_id)
+  return filters.uncollected ? collectionIDs.length === 0 : true
+}
+
+function hasLibraryShow(data: InfiniteData<LibraryList>, id: number) {
+  return data.pages.some((page) => page.entries.some((e) => e.kind === 'show' && e.id === id))
+}
+
+/** The show's card as the grid has it, from one fetch of the show; null
+    when the show is gone. Undefined when it couldn't be fetched. */
+async function fetchShowCard(queryClient: QueryClient, id: number): Promise<ShowSummary | null | undefined> {
+  try {
+    const detail = await queryClient.fetchQuery(showQuery(id))
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { summary, tvmaze_id, season_offset, title_locked, seasons, ...card } = detail
+    return card.episode_count > 0 ? card : null
+  } catch (error) {
+    return error instanceof ApiError && error.status === 404 ? null : undefined
+  }
+}
+
+/** The show-card counterpart of patchItemInLibrary, fetching the show at
+    most once and only when a loaded view holds its card or may gain it. */
+async function patchShowInLibrary(queryClient: QueryClient, id: number) {
+  const affected = libraryQueries(queryClient).filter((query) => {
+    const filters = query.queryKey[1] as LibraryEntryFilters | undefined
+    const data = query.state.data as InfiniteData<LibraryList> | undefined
+    return filters && data && (hasLibraryShow(data, id) || narrowed(filters))
+  })
+  if (affected.length === 0) return
+  const show = await fetchShowCard(queryClient, id)
+  if (show === undefined) return
+  if (show === null) {
+    removeShowFromLibrary(queryClient, id)
+    return
+  }
+  for (const query of affected) {
+    const filters = query.queryKey[1] as LibraryEntryFilters
+    const data = query.state.data as InfiniteData<LibraryList> | undefined
+    if (!data) continue
+    const matches =
+      filters.type !== 'movie' && inCollectionScope(filters, show.collection_ids) && !(filters.unwatched && show.has_progress)
+    if (!hasLibraryShow(data, id)) {
+      if (matches && narrowed(filters)) {
+        void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true, refetchType: 'active' })
+      }
+      continue
+    }
+    queryClient.setQueryData<InfiniteData<LibraryList>>(query.queryKey, (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        pages: old.pages.map((page) =>
+          matches
+            ? {
+                ...page,
+                entries: page.entries.map((e) => (e.kind === 'show' && e.id === id ? { kind: 'show' as const, ...show } : e)),
+              }
+            : {
+                ...page,
+                total: Math.max(0, page.total - 1),
+                entries: page.entries.filter((e) => !(e.kind === 'show' && e.id === id)),
+              },
+        ),
+      }
+    })
+  }
+}
+
+function removeShowFromLibrary(queryClient: QueryClient, id: number) {
+  for (const query of libraryQueries(queryClient)) {
+    const data = query.state.data as InfiniteData<LibraryList> | undefined
+    if (!data || !hasLibraryShow(data, id)) continue
+    queryClient.setQueryData<InfiniteData<LibraryList>>(query.queryKey, (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        pages: old.pages.map((page) => ({
+          ...page,
+          total: Math.max(0, page.total - 1),
+          entries: page.entries.filter((e) => !(e.kind === 'show' && e.id === id)),
         })),
       }
     })

@@ -295,12 +295,12 @@ export function useContinueWatching(enabled: boolean) {
   })
 }
 
+export function showQuery(id: number | null) {
+  return { queryKey: ['show', id], queryFn: () => api<ShowDetail>(`/api/shows/${id}`) }
+}
+
 export function useShow(id: number | null) {
-  return useQuery({
-    queryKey: ['show', id],
-    queryFn: () => api<ShowDetail>(`/api/shows/${id}`),
-    enabled: id != null,
-  })
+  return useQuery({ ...showQuery(id), enabled: id != null })
 }
 
 /** Rename (`title`) or "Looks right" (`confirmed: true`). */
@@ -583,9 +583,5 @@ export function useShowList(enabled = true) {
     halfway through the episode) so nothing runs before first frame. Shares
     `useShow`'s cache. */
 export function usePlayerShow(id: number | null, enabled: boolean) {
-  return useQuery({
-    queryKey: ['show', id],
-    queryFn: () => api<ShowDetail>(`/api/shows/${id}`),
-    enabled: id != null && enabled,
-  })
+  return useQuery({ ...showQuery(id), enabled: id != null && enabled })
 }

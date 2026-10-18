@@ -22,6 +22,8 @@ function item([id, season, episode, episodeEnd, available]: Row): LibraryEpisode
     episode,
     episode_end: episodeEnd,
     needs_check: false,
+    tmdb_id: null,
+    art_url: null,
   }
 }
 

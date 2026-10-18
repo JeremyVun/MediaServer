@@ -700,8 +700,8 @@ func TestShowEditsTeachAliases(t *testing.T) {
 	if detail.ID != andor.ID || detail.EpisodeCount != 2 {
 		t.Fatalf("merge returned %+v", detail.showSummaryResponse)
 	}
-	if a := e.alias("andor 2022"); a.ShowID != andor.ID || a.Source != store.AliasAuto {
-		t.Fatalf("merge left alias %+v, want it repointed at Andor", a)
+	if a := e.alias("andor 2022"); a.ShowID != andor.ID || a.Source != store.AliasOwner {
+		t.Fatalf("merge left alias %+v, want it repointed at Andor as an owner alias (ruling B17)", a)
 	}
 	e.fails("GET", "/api/shows/"+idStr(dupe.ID), nil, 404, "not_found")
 	e.fails("POST", "/api/shows/"+idStr(andor.ID)+"/merge", map[string]any{"into_show_id": andor.ID}, 400, "bad_request")

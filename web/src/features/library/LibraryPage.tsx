@@ -40,7 +40,7 @@ import {
 } from '../../lib/searchParams.ts'
 import { ContinueWatchingRow } from './ContinueWatchingRow.tsx'
 import { ItemCard } from './ItemCard.tsx'
-import { LibraryTypeTabs, UnwatchedToggle } from './LibraryTypeTabs.tsx'
+import { LibraryTypeTabs, UnwatchedCheckbox } from './LibraryTypeTabs.tsx'
 import { ShowCard } from './ShowCard.tsx'
 import { CollectionListPicker } from './CollectionListPicker.tsx'
 import {
@@ -557,7 +557,7 @@ export function LibraryPage() {
         <div className="mb-4 flex items-center justify-between text-sm text-secondary">
           <div className="flex items-center gap-5">
             <LibraryTypeTabs value={type} onChange={setType} />
-            <UnwatchedToggle pressed={unwatched} onChange={setUnwatched} />
+            <UnwatchedCheckbox checked={unwatched} onChange={setUnwatched} />
           </div>
           <div className="flex items-center gap-4">
             {urlState.q && <span className="hidden sm:inline">Search results for "{urlState.q}"</span>}

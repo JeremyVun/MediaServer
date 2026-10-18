@@ -134,9 +134,7 @@ test('probe: Progress rapid double switch credits nothing to the skipped episode
   await expect(page).toHaveURL(/\/watch\/105$/)
   await expect(trigger).toBeVisible()
   await wakeControls(page)
-  // The popover may reopen on its own once the new item loads (see the probe below).
-  await page.waitForTimeout(300)
-  if (!(await popover.isVisible())) await trigger.click()
+  await trigger.click()
   await popover.getByRole('button', { name: /Redline/ }).click()
   await expect(page).toHaveURL(/\/watch\/106$/)
   await waitPlaying(page)

@@ -59,27 +59,33 @@ export function progressCompleted(input: {
 
 /** What autoplay plays after `currentItemID`: the next available episode in
     the same sequence (specials or main), skipping gaps and offline files.
-    Mirrors `library.NextEpisode`. */
+    Mirrors `library.NextEpisode`, including its numbers for an episode
+    without them (season 1, episode 0). */
 export function nextEpisode(show: Pick<ShowDetail, 'seasons'>, currentItemID: number): LibraryEpisode | null {
-  const episodes = show.seasons.flatMap((season) => season.episodes).filter(isNumberedEpisode)
-  const current = episodes.find((episode) => episode.id === currentItemID)
+  const episodes = show.seasons
+    .flatMap((season) => season.episodes)
+    .filter((entry): entry is LibraryEpisode => entry.kind === 'item')
+    .map(numbered)
+  const current = episodes.find((n) => n.item.id === currentItemID)
   if (!current) return null
   const special = current.season === 0
   const candidates = episodes
-    .filter((episode) => (episode.season === 0) === special && episode.available && follows(episode, current))
-    .sort((a, b) => a.season - b.season || a.episode - b.episode)
-  return candidates[0] ?? null
+    .filter((n) => (n.season === 0) === special && n.item.available && follows(n, current))
+    .sort((a, b) => a.season - b.season || a.episode - b.episode || a.item.id - b.item.id)
+  return candidates[0]?.item ?? null
 }
 
-type NumberedEpisode = LibraryEpisode & { season: number; episode: number }
+type Numbered = { item: LibraryEpisode; season: number; episode: number; last: number }
 
-function isNumberedEpisode(entry: ShowDetail['seasons'][number]['episodes'][number]): entry is NumberedEpisode {
-  return entry.kind === 'item' && entry.season != null && entry.episode != null
+function numbered(item: LibraryEpisode): Numbered {
+  const season = item.season ?? 1
+  const episode = item.episode ?? 0
+  return { item, season, episode, last: Math.max(episode, item.episode_end ?? 0) }
 }
 
-function follows(episode: NumberedEpisode, current: NumberedEpisode): boolean {
-  if (episode.season !== current.season) return episode.season > current.season
-  return episode.episode > Math.max(current.episode, current.episode_end ?? 0)
+function follows(n: Numbered, current: Numbered): boolean {
+  if (n.season !== current.season) return n.season > current.season
+  return n.episode > current.last
 }
 
 /** Rows of baked-in letterbox at the top and bottom of a still, as fractions

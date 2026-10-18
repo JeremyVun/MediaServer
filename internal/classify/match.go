@@ -73,8 +73,10 @@ func (s *Service) prepare(ctx context.Context, q showQuery) (*lookup, error) {
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return nil, err
 		}
-		if err == nil && !upgradable(alias, show) {
-			return nil, nil
+		if err == nil {
+			if up, err := s.upgradable(ctx, alias, show); err != nil || !up {
+				return nil, err
+			}
 		}
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
@@ -176,7 +178,8 @@ func appendNew(seen, results []tvmaze.Result) []tvmaze.Result {
 // decide applies the confident-match test: the result's name normalizes to
 // the key (or the key without its country code), its premiere year equals
 // the parsed year when there is one, and it is the only such result, or
-// the only one from the key's country (ruling B7).
+// the only one from the key's country (ruling B7). A result from another
+// country than the key's never is (B17); one with no country may be.
 func decide(results []tvmaze.Result, key string, year *int) decision {
 	if len(results) == 0 {
 		return decision{}
@@ -198,9 +201,11 @@ func decide(results []tvmaze.Result, key string, year *int) decision {
 			return decision{match: match{result: named[0], found: true}, named: true}
 		}
 	}
-	if code := countryCode(key); code != "" && len(cands) > 1 {
+	if code := countryCode(key); code != "" {
 		if local := filter(cands, func(r tvmaze.Result) bool { return r.Country == code }); len(local) > 0 {
 			cands = local
+		} else if cands = filter(cands, func(r tvmaze.Result) bool { return r.Country == "" }); len(cands) == 0 {
+			return decision{match: match{result: named[0], found: true}, named: true}
 		}
 	}
 	if len(cands) == 1 {

@@ -230,9 +230,10 @@ func (s *Store) DeleteShow(ctx context.Context, id int64) (Show, error) {
 }
 
 // MergeShow moves every item (live or trashed) of from into into, repoints
-// from's aliases and collection memberships, then deletes from. The removed
+// from's aliases and collection memberships, then deletes from. An owner's
+// merge makes the repointed aliases owner aliases (ruling B17). The removed
 // show is returned so the caller can delete its cached images.
-func (s *Store) MergeShow(ctx context.Context, from, into int64) (Show, error) {
+func (s *Store) MergeShow(ctx context.Context, from, into int64, byOwner bool) (Show, error) {
 	if from == into {
 		return Show{}, fmt.Errorf("cannot merge a show into itself: %w", ErrInvalidInput)
 	}
@@ -257,7 +258,7 @@ func (s *Store) MergeShow(ctx context.Context, from, into int64) (Show, error) {
 		args  []any
 	}{
 		{`UPDATE media_items SET show_id = ?, updated_at = datetime('now') WHERE show_id = ?`, []any{into, from}},
-		{`UPDATE show_aliases SET show_id = ? WHERE show_id = ?`, []any{into, from}},
+		{`UPDATE show_aliases SET show_id = ?, source = CASE WHEN ? THEN 'owner' ELSE source END WHERE show_id = ?`, []any{into, byOwner, from}},
 		// A collection holding both keeps into's row; from's goes with from.
 		{`UPDATE OR IGNORE collection_items SET show_id = ? WHERE show_id = ?`, []any{into, from}},
 		{`DELETE FROM shows WHERE id = ?`, []any{from}},
@@ -350,6 +351,17 @@ func (s *Store) PutShowAlias(ctx context.Context, key string, showID int64, sour
 		return ShowAlias{}, err
 	}
 	return s.GetShowAlias(ctx, key)
+}
+
+// ShowOwnerMarks reports whether the owner has taught an alias pointing at
+// the show or locked one of its items, which automation must never move
+// (ruling B17).
+func (s *Store) ShowOwnerMarks(ctx context.Context, showID int64) (ownerAlias, lockedItem bool, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM show_aliases WHERE show_id = ? AND source = 'owner'),
+		       EXISTS (SELECT 1 FROM media_items WHERE show_id = ? AND locked = 1)`,
+		showID, showID).Scan(&ownerAlias, &lockedItem)
+	return ownerAlias, lockedItem, err
 }
 
 func (s *Store) ListShowAliases(ctx context.Context, showID int64) ([]ShowAlias, error) {

@@ -40,7 +40,7 @@ type ItemEdit struct {
 
 // EditItem applies an owner edit per design "Learning from edits": moving
 // to a show teaches the owner alias item.show_key → show; editing title,
-// type, show, season or episode locks the item and clears its Check mark;
+// type, year, show, season or episode locks the item and clears its Check mark;
 // leaving episode detaches it from its show. Bad values are
 // store.ErrInvalidInput (ErrEpisodeNeedsShow among them); a missing item is
 // store.ErrNotFound.
@@ -49,13 +49,25 @@ func (s *Service) EditItem(ctx context.Context, itemID int64, e ItemEdit) (store
 		return store.Item{}, err
 	}
 	defer s.unlock()
-	identity := e.Title != nil || e.Type != nil || e.ShowID != nil || e.Season != nil || e.Episode != nil || e.EpisodeEnd.Set
-	if !identity && !e.Confirmed && e.Year == nil && e.Summary == nil {
+	if e == (ItemEdit{}) {
 		return store.Item{}, fmt.Errorf("nothing to change: %w", store.ErrInvalidInput)
 	}
 	item, err := s.store.GetItem(ctx, itemID)
 	if err != nil {
 		return store.Item{}, err
+	}
+	// Re-sending a current value is not an edit (ruling B17): no lock, and
+	// no alias for an unchanged show.
+	if e.ShowID != nil && sameShow(e.ShowID, item.ShowID) {
+		e.ShowID = nil
+	}
+	if e.Year != nil && item.Year != nil && *e.Year == *item.Year {
+		e.Year = nil
+	}
+	identity := e.Title != nil || e.Type != nil || e.ShowID != nil || e.Season != nil || e.Episode != nil ||
+		e.EpisodeEnd.Set || e.Year != nil
+	if !identity && !e.Confirmed && e.Summary == nil {
+		return item, nil
 	}
 	if e.Title != nil {
 		title := strings.TrimSpace(*e.Title)
@@ -342,25 +354,25 @@ func (s *Service) ConfirmShow(ctx context.Context, showID int64) (store.Show, er
 }
 
 // MergeShows moves every item of from into into, repoints from's aliases
-// so later arrivals follow, deletes from and its art, and retitles the
-// unlocked episodes by into's episode list. It returns into.
+// as owner aliases so later arrivals follow, deletes from and its art, and
+// retitles the unlocked episodes by into's episode list. It returns into.
 func (s *Service) MergeShows(ctx context.Context, from, into int64) (store.Show, error) {
 	if err := s.lock(ctx); err != nil {
 		return store.Show{}, err
 	}
 	defer s.unlock()
-	if err := s.merge(ctx, from, into); err != nil {
+	if err := s.merge(ctx, from, into, true); err != nil {
 		return store.Show{}, err
 	}
 	return s.store.GetShow(ctx, into)
 }
 
-func (s *Service) merge(ctx context.Context, from, into int64) error {
+func (s *Service) merge(ctx context.Context, from, into int64, byOwner bool) error {
 	moved, err := s.store.ListItemsByShow(ctx, from)
 	if err != nil {
 		return err
 	}
-	removed, err := s.store.MergeShow(ctx, from, into)
+	removed, err := s.store.MergeShow(ctx, from, into, byOwner)
 	if err != nil {
 		return err
 	}

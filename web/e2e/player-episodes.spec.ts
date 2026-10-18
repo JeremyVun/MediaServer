@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { furiousMock, mockPlayerApi, trackFirstPlaying, type PlayerLog } from './support/player'
+import { episode, furiousMock, mockPlayerApi, trackFirstPlaying, type PlayerLog } from './support/player'
 
 test.skip(({ browserName }) => browserName !== 'chromium', 'Chromium plays the VP9 fixture; one engine is enough here')
 test.describe.configure({ timeout: 60_000 })
@@ -91,6 +91,21 @@ test('tapping the card plays the next episode now', async ({ page }) => {
   await nextCard(page).click()
   await expect(page).toHaveURL(/\/watch\/105$/)
   expect(log.progress.some((p) => p.itemID === 103 && p.body.completed === true)).toBe(true)
+})
+
+// D2: the server numbers an episode without season or episode S1 E0, so the
+// client must too, or autoplay stops at a video moved into a show.
+test('a numberless episode is S1 E0, so the card offers S1 E1', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const mock = furiousMock()
+  const moved = episode(150, 1, 1, 'Moved in', { season: null, episode: null })
+  mock.items[150] = moved
+  mock.shows[1].seasons[0].episodes.unshift(moved)
+  await mockPlayerApi(page, mock)
+  await page.goto('/watch/150')
+  await waitPlaying(page)
+  await seek(page, 20.5)
+  await expect(nextCard(page)).toContainText('S1 E1 · Pilot')
 })
 
 test('with no marker the card appears 20 s before the end; tap outside dismisses and cancels', async ({ page }) => {
@@ -236,6 +251,30 @@ test('desktop Episodes popover: clear of the seek bar, video box unchanged, swit
 
   await page.goBack()
   await expect(page).toHaveURL(/\/$/)
+})
+
+// D3: the popover's chunk is cached on a second visit, so the tap that
+// mounts it must not also run the trigger's native toggle and shut it.
+test('the Episodes popover opens on a second visit to the player, and stays shut after a pick', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await mockPlayerApi(page, furiousMock())
+  await openFromLibrary(page)
+  const trigger = page.getByRole('button', { name: 'Episodes' })
+  const popover = page.getByRole('dialog', { name: 'Episodes' })
+  await trigger.click()
+  await expect(popover).toBeVisible()
+  await page.keyboard.press('Escape')
+  await page.goBack()
+  await page.getByRole('link', { name: 'Play Furious S1 E3' }).click()
+  await waitPlaying(page)
+  await page.mouse.move(700, 450)
+  await trigger.click()
+  await expect(popover).toBeVisible()
+  await popover.getByRole('button', { name: /Redline/ }).click()
+  await expect(page).toHaveURL(/\/watch\/106$/)
+  await waitPlaying(page)
+  await page.waitForTimeout(500)
+  await expect(popover).toBeHidden()
 })
 
 test('phone Episodes popover opens below the top-bar icon, clear of the seek bar', async ({ page }) => {
