@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JeremyVun/MediaServer/internal/classify"
 	"github.com/JeremyVun/MediaServer/internal/config"
 	"github.com/JeremyVun/MediaServer/internal/db"
 	"github.com/JeremyVun/MediaServer/internal/events"
@@ -28,7 +29,9 @@ import (
 	"github.com/JeremyVun/MediaServer/internal/jobs"
 	"github.com/JeremyVun/MediaServer/internal/logging"
 	"github.com/JeremyVun/MediaServer/internal/playback"
+	"github.com/JeremyVun/MediaServer/internal/semantic"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 	"github.com/JeremyVun/MediaServer/internal/watcher"
 	webdist "github.com/JeremyVun/MediaServer/web"
 )
@@ -103,19 +106,40 @@ func run() error {
 		Log:             logger,
 	})
 
-	jobManager := jobs.NewManager(jobs.Options{
-		Store:              st,
-		Bus:                bus,
-		Log:                logger,
-		FFprobe:            cfg.Transcode.FFprobe,
-		FFmpeg:             cfg.Transcode.FFmpeg,
-		ThumbsDir:          cfg.ThumbsDir(),
-		TrashRetentionDays: cfg.Trash.RetentionDays,
-		UploadMaxAge:       7 * 24 * time.Hour,
-		CleanupInterval:    time.Hour,
-		HLSPruner:          playbackManager,
+	classifier := classify.New(classify.Options{
+		Store: st,
+		Bus:   bus,
+		Log:   logger,
+		TVmaze: tvmaze.New(tvmaze.Options{
+			BaseURL:   cfg.TVmaze.BaseURL,
+			UserAgent: "media-server/" + version,
+		}),
+		Sol:    &semantic.Classifier{},
+		ArtDir: cfg.ArtDir(),
 	})
+	if err := classifier.MarkLegacyCutoff(ctx); err != nil {
+		return fmt.Errorf("mark classify cutoff: %w", err)
+	}
+
+	jobManager := jobs.NewManager(jobs.Options{
+		Store:                 st,
+		Bus:                   bus,
+		Log:                   logger,
+		FFprobe:               cfg.Transcode.FFprobe,
+		FFmpeg:                cfg.Transcode.FFmpeg,
+		ThumbsDir:             cfg.ThumbsDir(),
+		TrashRetentionDays:    cfg.Trash.RetentionDays,
+		UploadMaxAge:          7 * 24 * time.Hour,
+		CleanupInterval:       time.Hour,
+		HLSPruner:             playbackManager,
+		Classifier:            classifier,
+		AiringRefreshInterval: 7 * 24 * time.Hour,
+	})
+	classifier.SetScheduler(jobManager)
 	jobManager.Start(ctx)
+	if err := jobManager.EnqueueBackfill(ctx); err != nil {
+		logger.Error("enqueue classify backfill and chapter sweep", "error", err)
+	}
 
 	ignoreSet := watcher.NewIgnoreSet()
 	watchManager := watcher.NewManager(watcher.Options{
@@ -135,6 +159,7 @@ func run() error {
 		Bus:           bus,
 		Log:           logger,
 		Jobs:          jobManager,
+		Classifier:    classifier,
 		RootLifecycle: watchManager,
 		Version:       version,
 		WebFS:         webdist.FS(),

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/JeremyVun/MediaServer/internal/classify"
 	"github.com/JeremyVun/MediaServer/internal/events"
 	"github.com/JeremyVun/MediaServer/internal/jobs"
 	"github.com/JeremyVun/MediaServer/internal/playback"
@@ -30,6 +31,7 @@ type Server struct {
 	bus           *events.Bus
 	log           *slog.Logger
 	jobs          *jobs.Manager
+	classifier    *classify.Service
 	rootLifecycle RootLifecycle
 	version       string
 	startedAt     time.Time
@@ -48,6 +50,7 @@ type Options struct {
 	Bus           *events.Bus
 	Log           *slog.Logger
 	Jobs          *jobs.Manager
+	Classifier    *classify.Service
 	RootLifecycle RootLifecycle
 	Version       string
 	WebFS         fs.FS // pass webdist.FS() output; nil serves a dev placeholder
@@ -71,6 +74,7 @@ func NewServer(opts Options) *Server {
 		bus:           opts.Bus,
 		log:           opts.Log,
 		jobs:          opts.Jobs,
+		classifier:    opts.Classifier,
 		rootLifecycle: opts.RootLifecycle,
 		version:       opts.Version,
 		startedAt:     time.Now(),

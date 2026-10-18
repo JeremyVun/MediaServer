@@ -17,6 +17,9 @@ const (
 	UploadProgress = "upload.progress"
 	UploadComplete = "upload.complete"
 	JobProgress    = "job.progress"
+	ShowAdded      = "show.added"
+	ShowUpdated    = "show.updated"
+	ShowRemoved    = "show.removed"
 )
 
 type Event struct {

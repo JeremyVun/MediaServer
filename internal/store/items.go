@@ -127,6 +127,36 @@ func (s *Store) GetItem(ctx context.Context, id int64) (Item, error) {
 	return scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM media_items WHERE id = ?`, id))
 }
 
+// ListUnclassifiedItemIDs returns live items still waiting for classify,
+// for the boot backfill.
+func (s *Store) ListUnclassifiedItemIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM media_items WHERE deleted_at IS NULL AND classified_at IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	return collectIDs(rows)
+}
+
+// ListItemsByShow returns every item of a show, live or trashed.
+func (s *Store) ListItemsByShow(ctx context.Context, showID int64) ([]Item, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+itemCols+` FROM media_items WHERE show_id = ? ORDER BY id`, showID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 // UpdateItemParams applies partial edits: nil or unset fields are left
 // unchanged.
 type UpdateItemParams struct {

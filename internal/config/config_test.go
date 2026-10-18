@@ -31,6 +31,23 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if cfg.Log.Level != "info" {
 		t.Errorf("log level default = %q", cfg.Log.Level)
 	}
+	if cfg.TVmaze.BaseURL != "https://api.tvmaze.com" {
+		t.Errorf("tvmaze base url default = %q", cfg.TVmaze.BaseURL)
+	}
+}
+
+func TestTVmazeBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(writeConfig(t, "data_dir: "+dir+"/data\ntvmaze:\n  base_url: \"http://127.0.0.1:9999/\"\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.TVmaze.BaseURL != "http://127.0.0.1:9999" {
+		t.Errorf("base url = %q", cfg.TVmaze.BaseURL)
+	}
+	if _, err := Load(writeConfig(t, "data_dir: "+dir+"/data\ntvmaze:\n  base_url: \"api.tvmaze.com\"\n")); err == nil {
+		t.Error("schemeless base url accepted")
+	}
 }
 
 func TestLoadCreatesOwnedDirectories(t *testing.T) {
@@ -43,7 +60,7 @@ hls_cache:
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, d := range []string{cfg.DataDir, cfg.HLSCache.Dir, cfg.LogDir(), cfg.ThumbsDir()} {
+	for _, d := range []string{cfg.DataDir, cfg.HLSCache.Dir, cfg.LogDir(), cfg.ThumbsDir(), cfg.ArtDir()} {
 		if info, err := os.Stat(d); err != nil || !info.IsDir() {
 			t.Errorf("%s not created: %v", d, err)
 		}

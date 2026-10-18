@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/JeremyVun/MediaServer/internal/classify"
 	"github.com/JeremyVun/MediaServer/internal/events"
 	"github.com/JeremyVun/MediaServer/internal/library"
 	"github.com/JeremyVun/MediaServer/internal/probe"
@@ -27,6 +28,11 @@ const (
 	TypeThumbnail = "thumbnail"
 	TypeReconcile = "reconcile"
 	TypeCleanup   = "cleanup"
+	TypeClassify  = "classify"
+	// TypeShowRefresh refetches one show from TVmaze; TypeAiringRefresh is
+	// the weekly sweep that queues it for shows still airing.
+	TypeShowRefresh   = "show_refresh"
+	TypeAiringRefresh = "airing_refresh"
 
 	maxAttempts = 3
 
@@ -48,13 +54,15 @@ type Manager struct {
 	bus   *events.Bus
 	log   *slog.Logger
 
-	probe  probe.Runner
-	thumbs thumbs.Generator
-	hls    CachePruner
+	probe    probe.Runner
+	thumbs   thumbs.Generator
+	hls      CachePruner
+	classify *classify.Service
 
-	trashRetentionDays int
-	uploadMaxAge       time.Duration
-	cleanupInterval    time.Duration
+	trashRetentionDays    int
+	uploadMaxAge          time.Duration
+	cleanupInterval       time.Duration
+	airingRefreshInterval time.Duration
 
 	workers int
 	nudge   chan struct{}
@@ -80,6 +88,9 @@ type Options struct {
 	UploadMaxAge       time.Duration
 	CleanupInterval    time.Duration
 	HLSPruner          CachePruner
+	// Classifier files new items; nil skips classify (tests of other jobs).
+	Classifier            *classify.Service
+	AiringRefreshInterval time.Duration // 0 disables the weekly airing sweep
 }
 
 type ReconcilePayload struct {
@@ -97,6 +108,16 @@ type ThumbnailPayload struct {
 
 type CleanupPayload struct{}
 
+type ClassifyPayload struct {
+	ItemID int64 `json:"item_id"`
+}
+
+type ShowRefreshPayload struct {
+	ShowID int64 `json:"show_id"`
+}
+
+type AiringRefreshPayload struct{}
+
 func NewManager(opts Options) *Manager {
 	workers := opts.Workers
 	if workers <= 0 {
@@ -109,18 +130,20 @@ func NewManager(opts Options) *Manager {
 		opts.UploadMaxAge = 7 * 24 * time.Hour
 	}
 	return &Manager{
-		store:              opts.Store,
-		bus:                opts.Bus,
-		log:                opts.Log,
-		probe:              probe.Runner{Binary: opts.FFprobe, Log: opts.Log},
-		thumbs:             thumbs.Generator{Binary: opts.FFmpeg, Dir: opts.ThumbsDir, Log: opts.Log},
-		hls:                opts.HLSPruner,
-		trashRetentionDays: opts.TrashRetentionDays,
-		uploadMaxAge:       opts.UploadMaxAge,
-		cleanupInterval:    opts.CleanupInterval,
-		workers:            workers,
-		nudge:              make(chan struct{}, 1),
-		reconcileLocks:     make(map[int64]*sync.Mutex),
+		store:                 opts.Store,
+		bus:                   opts.Bus,
+		log:                   opts.Log,
+		probe:                 probe.Runner{Binary: opts.FFprobe, Log: opts.Log},
+		thumbs:                thumbs.Generator{Binary: opts.FFmpeg, Dir: opts.ThumbsDir, Log: opts.Log},
+		hls:                   opts.HLSPruner,
+		classify:              opts.Classifier,
+		trashRetentionDays:    opts.TrashRetentionDays,
+		uploadMaxAge:          opts.UploadMaxAge,
+		cleanupInterval:       opts.CleanupInterval,
+		airingRefreshInterval: opts.AiringRefreshInterval,
+		workers:               workers,
+		nudge:                 make(chan struct{}, 1),
+		reconcileLocks:        make(map[int64]*sync.Mutex),
 	}
 }
 
@@ -133,6 +156,12 @@ func (m *Manager) Start(ctx context.Context) {
 	if m.cleanupInterval > 0 {
 		if _, err := m.EnqueueCleanup(ctx, time.Now()); err != nil {
 			m.log.Error("enqueue cleanup", "error", err)
+		}
+	}
+	// A queued sweep due sooner is kept, so restarts never postpone it.
+	if m.airingRefreshInterval > 0 && m.classify != nil {
+		if _, err := m.enqueueAt(ctx, TypeAiringRefresh, AiringRefreshPayload{}, time.Now().Add(m.airingRefreshInterval)); err != nil {
+			m.log.Error("enqueue airing refresh", "error", err)
 		}
 	}
 	for i := 0; i < m.workers; i++ {
@@ -158,16 +187,50 @@ func (m *Manager) EnqueueProbe(ctx context.Context, rootID int64, relPath string
 }
 
 func (m *Manager) EnqueueCleanup(ctx context.Context, runAt time.Time) (store.Job, error) {
-	raw, err := json.Marshal(CleanupPayload{})
-	if err != nil {
-		return store.Job{}, err
+	return m.enqueueAt(ctx, TypeCleanup, CleanupPayload{}, runAt)
+}
+
+func (m *Manager) EnqueueClassify(ctx context.Context, itemID int64) (store.Job, error) {
+	return m.enqueue(ctx, TypeClassify, ClassifyPayload{ItemID: itemID})
+}
+
+// EnqueueShowRefresh implements classify.Scheduler.
+func (m *Manager) EnqueueShowRefresh(ctx context.Context, showID int64, runAt time.Time) error {
+	_, err := m.enqueueAt(ctx, TypeShowRefresh, ShowRefreshPayload{ShowID: showID}, runAt)
+	return err
+}
+
+// EnqueueBackfill runs at boot: classify every live item still unclassified
+// (the whole library on the first boot after the shows upgrade), and probe
+// every online file whose chapters were never read.
+func (m *Manager) EnqueueBackfill(ctx context.Context) error {
+	if m.classify != nil {
+		ids, err := m.store.ListUnclassifiedItemIDs(ctx)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := m.EnqueueClassify(ctx, id); err != nil {
+				return err
+			}
+		}
+		if len(ids) > 0 {
+			m.log.Info("classify backfill queued", "items", len(ids))
+		}
 	}
-	job, err := m.store.EnqueueJobAt(ctx, TypeCleanup, string(raw), runAt)
+	files, err := m.store.ListFilesNeedingChapters(ctx)
 	if err != nil {
-		return store.Job{}, err
+		return err
 	}
-	m.wake()
-	return job, nil
+	for _, f := range files {
+		if _, err := m.EnqueueProbe(ctx, f.RootID, f.RelPath); err != nil {
+			return err
+		}
+	}
+	if len(files) > 0 {
+		m.log.Info("chapter sweep queued", "files", len(files))
+	}
+	return nil
 }
 
 func (m *Manager) enqueueProbe(ctx context.Context, rootID int64, relPath string) (store.Job, error) {
@@ -179,11 +242,15 @@ func (m *Manager) enqueueThumbnail(ctx context.Context, fileID int64) (store.Job
 }
 
 func (m *Manager) enqueue(ctx context.Context, typ string, payload any) (store.Job, error) {
+	return m.enqueueAt(ctx, typ, payload, time.Now())
+}
+
+func (m *Manager) enqueueAt(ctx context.Context, typ string, payload any, runAt time.Time) (store.Job, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return store.Job{}, err
 	}
-	job, err := m.store.EnqueueJob(ctx, typ, string(raw))
+	job, err := m.store.EnqueueJobAt(ctx, typ, string(raw), runAt)
 	if err != nil {
 		return store.Job{}, err
 	}
@@ -247,6 +314,11 @@ func (m *Manager) runJob(ctx context.Context, job store.Job) {
 				m.log.Error("schedule cleanup", "error", enqueueErr)
 			}
 		}
+		if job.Type == TypeAiringRefresh && m.airingRefreshInterval > 0 && ctx.Err() == nil {
+			if _, enqueueErr := m.enqueueAt(ctx, TypeAiringRefresh, AiringRefreshPayload{}, time.Now().Add(m.airingRefreshInterval)); enqueueErr != nil {
+				m.log.Error("schedule airing refresh", "error", enqueueErr)
+			}
+		}
 		return
 	}
 
@@ -302,9 +374,53 @@ func (m *Manager) handleJob(ctx context.Context, job store.Job) error {
 			return Permanent(fmt.Errorf("decode cleanup payload: %w", err))
 		}
 		return m.handleCleanup(ctx)
+	case TypeClassify:
+		var payload ClassifyPayload
+		if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
+			return Permanent(fmt.Errorf("decode classify payload: %w", err))
+		}
+		if m.classify == nil {
+			return Permanent(errors.New("classifier not configured"))
+		}
+		return m.classify.Classify(ctx, payload.ItemID)
+	case TypeShowRefresh:
+		var payload ShowRefreshPayload
+		if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
+			return Permanent(fmt.Errorf("decode show refresh payload: %w", err))
+		}
+		return m.handleShowRefresh(ctx, payload.ShowID)
+	case TypeAiringRefresh:
+		return m.handleAiringRefresh(ctx)
 	default:
 		return Permanent(fmt.Errorf("unknown job type %q", job.Type))
 	}
+}
+
+func (m *Manager) handleShowRefresh(ctx context.Context, showID int64) error {
+	if m.classify == nil {
+		return Permanent(errors.New("classifier not configured"))
+	}
+	err := m.classify.RefreshShow(ctx, showID)
+	if errors.Is(err, classify.ErrUnreachable) {
+		return RetryLater(err, classify.UnreachableRetry)
+	}
+	return err
+}
+
+func (m *Manager) handleAiringRefresh(ctx context.Context) error {
+	if m.classify == nil {
+		return Permanent(errors.New("classifier not configured"))
+	}
+	ids, err := m.classify.AiringShowIDs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if err := m.EnqueueShowRefresh(ctx, id, time.Now()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Manager) handleReconcile(ctx context.Context, rootID int64) error {
@@ -460,17 +576,9 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 
 	var item store.Item
 	var file store.File
+	unchanged := false
 	if newFile {
-		parsed := library.ParsePath(relPath)
-		itemType := "video"
-		if parsed.Kind == library.KindEpisode {
-			itemType = "episode"
-		}
-		item, file, err = m.store.CreateItemWithFile(ctx, store.NewItem{
-			Type:  itemType,
-			Title: parsed.Title,
-			Year:  parsed.Year,
-		}, store.NewFile{
+		item, file, err = m.store.CreateItemWithFile(ctx, classify.Guess(relPath, probed.DurationS), store.NewFile{
 			RootID:      root.ID,
 			RelPath:     relPath,
 			Size:        info.Size(),
@@ -486,6 +594,8 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 		if err != nil {
 			return err
 		}
+		unchanged = existing.ProbedAt != nil && existing.Size == info.Size() &&
+			existing.Mtime == store.FormatTime(info.ModTime()) && existing.Fingerprint == fingerprint
 		if err := m.store.UpdateFileStat(ctx, file.ID, info.Size(), info.ModTime(), fingerprint); err != nil {
 			return err
 		}
@@ -521,8 +631,33 @@ func (m *Manager) handleProbe(ctx context.Context, rootID int64, relPath string)
 	if err := m.store.ReplaceFileStreams(ctx, file.ID, streams); err != nil {
 		return err
 	}
-	if _, err := m.enqueueThumbnail(ctx, file.ID); err != nil {
+	chapters := make([]store.Chapter, 0, len(probed.Chapters))
+	for _, c := range probed.Chapters {
+		chapters = append(chapters, store.Chapter{StartS: c.StartS, EndS: c.EndS, Title: c.Title})
+	}
+	if err := m.store.ReplaceFileChapters(ctx, file.ID, chapters); err != nil {
 		return err
+	}
+	// A credits chapter can complete progress saved before it was known.
+	if _, _, err := m.store.ReevaluateProgress(ctx, item.ID); err != nil {
+		return err
+	}
+	if m.classify != nil {
+		if err := m.classify.ApplyProbedDuration(ctx, item, relPath, probed.DurationS); err != nil {
+			return err
+		}
+	}
+	// The boot chapter sweep re-probes every file; an unchanged one keeps
+	// its thumbnail.
+	if !unchanged {
+		if _, err := m.enqueueThumbnail(ctx, file.ID); err != nil {
+			return err
+		}
+	}
+	if newFile && m.classify != nil {
+		if _, err := m.EnqueueClassify(ctx, item.ID); err != nil {
+			return err
+		}
 	}
 
 	eventType := events.ItemUpdated
@@ -644,7 +779,12 @@ func (m *Manager) purgeTrashedItem(ctx context.Context, itemID int64) (bool, err
 			return false, err
 		}
 	}
-	if _, err := m.store.HardDeleteItem(ctx, itemID); err != nil {
+	if m.classify != nil {
+		err = m.classify.HardDeleteItem(ctx, itemID)
+	} else {
+		_, err = m.store.HardDeleteItem(ctx, itemID)
+	}
+	if err != nil {
 		return false, err
 	}
 	return true, nil

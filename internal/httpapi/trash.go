@@ -298,13 +298,23 @@ func (s *Server) purgeItem(w http.ResponseWriter, ctx context.Context, item stor
 			return false
 		}
 	}
-	if _, err := s.store.HardDeleteItem(ctx, item.ID); err != nil {
+	if err := s.hardDeleteItem(ctx, item.ID); err != nil {
 		if !skipUnavailable {
 			writeStoreError(w, err)
 		}
 		return false
 	}
 	return true
+}
+
+// hardDeleteItem goes through the classifier when there is one, so a show
+// purged with its last episode loses its art and publishes show.removed.
+func (s *Server) hardDeleteItem(ctx context.Context, itemID int64) error {
+	if s.classifier != nil {
+		return s.classifier.HardDeleteItem(ctx, itemID)
+	}
+	_, err := s.store.HardDeleteItem(ctx, itemID)
+	return err
 }
 
 func (s *Server) publishRemoved(itemID int64) {

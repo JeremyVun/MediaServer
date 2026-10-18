@@ -6,7 +6,7 @@ server:
   bind: "0.0.0.0"
   port: 8484
 
-data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, logs
+data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, show art (art/), logs
 
 # Transcode working files (HLS segments, keyframe indexes). Defaults to the
 # internal SSD. To keep it off the SSD, point it at a hidden directory on a
@@ -38,6 +38,12 @@ upload:
 
 trash:
   retention_days: 7
+
+# Show names, summaries, episode titles, posters and backdrops come from
+# TVmaze (throttled to 20 requests per 10 s). Point base_url elsewhere only
+# for a test double or a proxy. Artwork is cached under data_dir/art.
+tvmaze:
+  base_url: "https://api.tvmaze.com"
 
 log:
   level: "info"                        # debug | info | warn | error

@@ -115,3 +115,11 @@ func titleCaseAcronymsV1(s string) string {
 	}
 	return strings.Join(words, " ")
 }
+
+// LegacyTitle is what pre-shows ingest wrote for relPath: the item type
+// (video|episode), title and year. The backfill compares stored items with
+// it to tell owner edits from parser output.
+func LegacyTitle(relPath string) (itemType, title string, year *int) {
+	p := parseTitleV1(relPath)
+	return p.Type, p.Title, p.Year
+}

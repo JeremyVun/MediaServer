@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/JeremyVun/MediaServer/internal/classify"
 	"github.com/JeremyVun/MediaServer/internal/jobs"
 	"github.com/JeremyVun/MediaServer/internal/library"
 	"github.com/JeremyVun/MediaServer/internal/store"
@@ -191,16 +192,7 @@ func (s *Server) catalogUnprobedFile(w http.ResponseWriter, r *http.Request, roo
 		s.log.Error("fingerprint unprobed file", "path", path, "error", err)
 		return store.Item{}, false
 	}
-	parsed := library.ParsePath(relPath)
-	itemType := "video"
-	if parsed.Kind == library.KindEpisode {
-		itemType = "episode"
-	}
-	item, _, err := s.store.CreateItemWithFile(ctx, store.NewItem{
-		Type:  itemType,
-		Title: parsed.Title,
-		Year:  parsed.Year,
-	}, store.NewFile{
+	item, _, err := s.store.CreateItemWithFile(ctx, classify.Guess(relPath, 0), store.NewFile{
 		RootID:      root.ID,
 		RelPath:     relPath,
 		Size:        info.Size(),

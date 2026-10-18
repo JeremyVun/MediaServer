@@ -63,7 +63,10 @@ func UpNext(episodes []EpisodeState) *EpisodeState {
 		return found(*latestOpen)
 	}
 	if latestDone != nil {
-		return after(ordered, *latestDone, false)
+		if next := after(ordered, *latestDone, false); next != nil || !latestDone.special() {
+			return next
+		}
+		return firstUnwatchedMain(ordered)
 	}
 	for _, e := range ordered {
 		if !e.special() {
@@ -81,6 +84,24 @@ func NextEpisode(episodes []EpisodeState, currentItemID int64) *EpisodeState {
 	for _, e := range ordered {
 		if e.ItemID == currentItemID {
 			return after(ordered, e, true)
+		}
+	}
+	return nil
+}
+
+// firstUnwatchedMain is where a viewer goes after the last special (ruling
+// B2), so a watched special never makes an unwatched show read caught up.
+func firstUnwatchedMain(ordered []EpisodeState) *EpisodeState {
+	type number struct{ season, episode int }
+	watched := map[number]bool{}
+	for _, e := range ordered {
+		if !e.special() && e.completed() {
+			watched[number{e.Season, e.Episode}] = true
+		}
+	}
+	for _, e := range ordered {
+		if !e.special() && !watched[number{e.Season, e.Episode}] {
+			return found(e)
 		}
 	}
 	return nil

@@ -65,3 +65,28 @@ func TestParseRejectsMissingStreams(t *testing.T) {
 		t.Fatal("missing streams accepted")
 	}
 }
+
+func TestParseChapters(t *testing.T) {
+	raw := []byte(`{
+	  "streams": [{"index": 0, "codec_name": "h264", "codec_type": "video", "width": 1920, "height": 1080}],
+	  "chapters": [
+	    {"id": 0, "time_base": "1/1000000000", "start": 0, "start_time": "0.000000", "end_time": "62.500000", "tags": {"title": "Intro"}},
+	    {"id": 1, "time_base": "1/1000000000", "start_time": "62.500000", "end_time": "3100.000000", "tags": {}},
+	    {"id": 2, "time_base": "1/1000000000", "start_time": "3100.000000", "end_time": "3300.000000", "tags": {"title": " Credits "}}
+	  ],
+	  "format": {"format_name": "matroska,webm", "duration": "3300.000000"}
+	}`)
+	got, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []Chapter{{0, 62.5, "Intro"}, {62.5, 3100, ""}, {3100, 3300, "Credits"}}
+	if len(got.Chapters) != len(want) {
+		t.Fatalf("chapters = %+v", got.Chapters)
+	}
+	for i := range want {
+		if got.Chapters[i] != want[i] {
+			t.Errorf("chapter %d = %+v, want %+v", i, got.Chapters[i], want[i])
+		}
+	}
+}

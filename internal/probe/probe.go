@@ -31,6 +31,13 @@ type Result struct {
 	Width     int
 	Height    int
 	Streams   []Stream
+	Chapters  []Chapter
+}
+
+type Chapter struct {
+	StartS float64
+	EndS   float64
+	Title  string
 }
 
 type Stream struct {
@@ -61,6 +68,7 @@ func (r Runner) Probe(ctx context.Context, path string) (Result, error) {
 		"-print_format", "json",
 		"-show_format",
 		"-show_streams",
+		"-show_chapters",
 		path,
 	)
 	cmd.WaitDelay = waitDelay
@@ -133,6 +141,14 @@ func Parse(raw []byte) (Result, error) {
 		res.Streams = append(res.Streams, stream)
 	}
 
+	for _, ch := range doc.Chapters {
+		res.Chapters = append(res.Chapters, Chapter{
+			StartS: parseFloat(ch.StartTime),
+			EndS:   parseFloat(ch.EndTime),
+			Title:  strings.TrimSpace(ch.Tags.Title),
+		})
+	}
+
 	if res.Container == "" {
 		return Result{}, fmt.Errorf("ffprobe result missing container")
 	}
@@ -143,8 +159,17 @@ func Parse(raw []byte) (Result, error) {
 }
 
 type ffprobeDoc struct {
-	Streams []ffprobeStream `json:"streams"`
-	Format  ffprobeFormat   `json:"format"`
+	Streams  []ffprobeStream  `json:"streams"`
+	Format   ffprobeFormat    `json:"format"`
+	Chapters []ffprobeChapter `json:"chapters"`
+}
+
+type ffprobeChapter struct {
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+	Tags      struct {
+		Title string `json:"title"`
+	} `json:"tags"`
 }
 
 type ffprobeFormat struct {

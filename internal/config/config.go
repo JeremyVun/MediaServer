@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,7 @@ type Config struct {
 	Transcode Transcode `yaml:"transcode"`
 	Upload    Upload    `yaml:"upload"`
 	Trash     Trash     `yaml:"trash"`
+	TVmaze    TVmaze    `yaml:"tvmaze"`
 	Log       Log       `yaml:"log"`
 	Debug     Debug     `yaml:"debug"`
 }
@@ -65,6 +67,12 @@ type Trash struct {
 	RetentionDays int `yaml:"retention_days"`
 }
 
+// TVmaze supplies show metadata; BaseURL is overridable for tests and
+// proxies.
+type TVmaze struct {
+	BaseURL string `yaml:"base_url"`
+}
+
 type Log struct {
 	Level string `yaml:"level"` // debug|info|warn|error
 }
@@ -88,6 +96,7 @@ func Default() Config {
 		Transcode: Transcode{MaxConcurrent: 2},
 		Upload:    Upload{MinFreeGB: 5},
 		Trash:     Trash{RetentionDays: 7},
+		TVmaze:    TVmaze{BaseURL: "https://api.tvmaze.com"},
 		Log:       Log{Level: "info"},
 	}
 }
@@ -127,6 +136,7 @@ func (c *Config) normalize() error {
 	if c.HLSCache.Dir != "" {
 		c.HLSCache.Dir = filepath.Clean(c.HLSCache.Dir)
 	}
+	c.TVmaze.BaseURL = strings.TrimRight(strings.TrimSpace(c.TVmaze.BaseURL), "/")
 	for i := range c.Roots {
 		if c.Roots[i].Path, err = expandTilde(c.Roots[i].Path); err != nil {
 			return err
@@ -143,7 +153,7 @@ func (c *Config) Validate() error {
 	if c.DataDir == "" {
 		return fmt.Errorf("data_dir is required")
 	}
-	for _, dir := range []string{c.DataDir, c.LogDir(), c.ThumbsDir()} {
+	for _, dir := range []string{c.DataDir, c.LogDir(), c.ThumbsDir(), c.ArtDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create %s: %w", dir, err)
 		}
@@ -179,6 +189,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Trash.RetentionDays < 0 {
 		return fmt.Errorf("trash.retention_days must be >= 0")
+	}
+	if u, err := url.Parse(c.TVmaze.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("tvmaze.base_url %q must be an http(s) URL", c.TVmaze.BaseURL)
 	}
 	if c.Debug.PprofPort != 0 && (c.Debug.PprofPort < 1 || c.Debug.PprofPort > 65535) {
 		return fmt.Errorf("debug.pprof_port %d out of range 1-65535", c.Debug.PprofPort)
@@ -273,6 +286,9 @@ func (c *Config) LogDir() string { return filepath.Join(c.DataDir, "logs") }
 
 // ThumbsDir holds generated thumbnails.
 func (c *Config) ThumbsDir() string { return filepath.Join(c.DataDir, "thumbs") }
+
+// ArtDir holds downloaded artwork (show posters and backdrops).
+func (c *Config) ArtDir() string { return filepath.Join(c.DataDir, "art") }
 
 func expandTilde(p string) (string, error) {
 	if p == "~" || strings.HasPrefix(p, "~/") {

@@ -382,3 +382,91 @@ func TestReplaceShowEpisodes(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+func TestDeleteShowIfEmpty(t *testing.T) {
+	f := newFixture(t)
+	show := f.show("Andor")
+	e := f.episode(show, 1, 1, "E1")
+	if removed, err := f.s.DeleteShowIfEmpty(f.ctx, show.ID); err != nil || removed != nil {
+		t.Fatalf("show with an item removed: %+v, %v", removed, err)
+	}
+	if err := f.s.MarkItemTrashed(f.ctx, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := f.s.DeleteShowIfEmpty(f.ctx, show.ID); err != nil || removed != nil {
+		t.Fatalf("show with a trashed item removed: %+v, %v", removed, err)
+	}
+	video := "video"
+	if _, err := f.s.UpdateItem(f.ctx, e.ID, store.UpdateItemParams{Type: &video, ShowID: store.SetNull[int64]()}); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := f.s.DeleteShowIfEmpty(f.ctx, show.ID)
+	if err != nil || removed == nil || removed.ID != show.ID {
+		t.Fatalf("empty show = %+v, %v; want it removed", removed, err)
+	}
+	if removed, err := f.s.DeleteShowIfEmpty(f.ctx, show.ID); err != nil || removed != nil {
+		t.Fatalf("missing show = %+v, %v", removed, err)
+	}
+}
+
+func TestListAiringShowIDs(t *testing.T) {
+	f := newFixture(t)
+	day := func(s string) *string { return &s }
+	shows := map[string][]store.ShowEpisode{
+		"airing":   {{Season: 1, Number: 1, Title: "A", Airdate: day("2026-07-01")}, {Season: 1, Number: 2, Title: "B", Airdate: day("2026-10-01")}},
+		"upcoming": {{Season: 1, Number: 1, Title: "A", Airdate: day("2026-01-01")}, {Season: 2, Number: 1, Title: "B", Airdate: day("2026-11-01")}},
+		"ended":    {{Season: 1, Number: 1, Title: "A", Airdate: day("2026-08-01")}},
+		"undated":  {{Season: 1, Number: 1, Title: "A"}},
+	}
+	ids := map[string]int64{}
+	for i, name := range []string{"airing", "upcoming", "ended", "undated"} {
+		tv := int64(100 + i)
+		show, err := f.s.CreateShow(f.ctx, store.NewShow{Title: name, TVmazeID: &tv})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.s.ReplaceShowEpisodes(f.ctx, show.ID, shows[name]); err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = show.ID
+	}
+	unmatched := f.show("unmatched")
+	if err := f.s.ReplaceShowEpisodes(f.ctx, unmatched.ID, shows["airing"]); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.s.ListAiringShowIDs(f.ctx, "2026-08-19", "2026-10-18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []int64{ids["airing"]}) {
+		t.Fatalf("airing = %v, want [%d]", got, ids["airing"])
+	}
+}
+
+func TestClassifyBookkeeping(t *testing.T) {
+	f := newFixture(t)
+	pending := f.item("episode", "Pending", 60)
+	trashed := f.item("video", "Trashed", 60)
+	if err := f.s.MarkItemTrashed(f.ctx, trashed.ID); err != nil {
+		t.Fatal(err)
+	}
+	show := f.show("Done")
+	done := f.episode(show, 1, 1, "Done")
+	ids, err := f.s.ListUnclassifiedItemIDs(f.ctx)
+	if err != nil || !reflect.DeepEqual(ids, []int64{pending.ID}) {
+		t.Fatalf("unclassified = %v, %v", ids, err)
+	}
+	items, err := f.s.ListItemsByShow(f.ctx, show.ID)
+	if err != nil || len(items) != 1 || items[0].ID != done.ID {
+		t.Fatalf("show items = %+v, %v", items, err)
+	}
+
+	first, err := f.s.SetSettingIfAbsent(f.ctx, store.SettingClassifyLegacyBefore, "2026-10-18 00:00:00")
+	if err != nil || first != "2026-10-18 00:00:00" {
+		t.Fatalf("first = %q, %v", first, err)
+	}
+	again, err := f.s.SetSettingIfAbsent(f.ctx, store.SettingClassifyLegacyBefore, "2027-01-01 00:00:00")
+	if err != nil || again != first {
+		t.Fatalf("second write = %q, %v; want the first value kept", again, err)
+	}
+}

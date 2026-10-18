@@ -268,6 +268,51 @@ func (s *Store) MergeShow(ctx context.Context, from, into int64) (Show, error) {
 	return removed, tx.Commit()
 }
 
+// DeleteShowIfEmpty deletes a show nothing belongs to any more, live or
+// trashed, and returns it so the caller can delete its images; it returns
+// nil when the show still has items or no longer exists.
+func (s *Store) DeleteShowIfEmpty(ctx context.Context, id int64) (*Show, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	show, err := getShow(ctx, tx, id)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var remaining int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM media_items WHERE show_id = ?`, id).Scan(&remaining); err != nil {
+		return nil, err
+	}
+	if remaining > 0 {
+		return nil, nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM shows WHERE id = ?`, id); err != nil {
+		return nil, err
+	}
+	return &show, tx.Commit()
+}
+
+// ListAiringShowIDs returns matched shows whose latest episode to air on or
+// before today aired on or after since (both YYYY-MM-DD).
+func (s *Store) ListAiringShowIDs(ctx context.Context, since, today string) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT s.id FROM shows s
+		JOIN show_episodes e ON e.show_id = s.id
+		WHERE s.tvmaze_id IS NOT NULL AND e.airdate IS NOT NULL AND e.airdate <= ?
+		GROUP BY s.id
+		HAVING MAX(e.airdate) >= ?
+		ORDER BY s.id`, today, since)
+	if err != nil {
+		return nil, err
+	}
+	return collectIDs(rows)
+}
+
 func (s *Store) GetShowAlias(ctx context.Context, key string) (ShowAlias, error) {
 	var a ShowAlias
 	err := s.db.QueryRowContext(ctx,
