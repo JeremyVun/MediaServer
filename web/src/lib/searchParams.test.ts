@@ -15,16 +15,20 @@ describe('parseLibraryParams', () => {
       collectionID: undefined,
       uncollected: false,
       type: '',
+      unwatched: false,
     })
   })
 
-  it('reads q, sort, collection, type', () => {
-    expect(parseLibraryParams(new URLSearchParams('q=matrix&sort=title&collection=7&type=show'))).toEqual({
+  it('reads q, sort, collection, type, unwatched', () => {
+    expect(
+      parseLibraryParams(new URLSearchParams('q=matrix&sort=title&collection=7&type=show&unwatched=1')),
+    ).toEqual({
       q: 'matrix',
       sort: 'title',
       collectionID: 7,
       uncollected: false,
       type: 'show',
+      unwatched: true,
     })
   })
 
@@ -50,34 +54,37 @@ describe('parseLibraryParams', () => {
 describe('libraryParamUpdates', () => {
   it('omits defaults so the URL stays clean', () => {
     expect(
-      libraryParamUpdates({ q: '', sort: 'added', collectionID: undefined, uncollected: false, type: '' }),
+      libraryParamUpdates({ q: '', sort: 'added', collectionID: undefined, uncollected: false, type: '', unwatched: false }),
     ).toEqual({
       q: undefined,
       sort: undefined,
       collection: undefined,
       type: undefined,
+      unwatched: undefined,
     })
   })
 
   it('includes non-default values', () => {
     expect(
-      libraryParamUpdates({ q: 'matrix', sort: 'year', collectionID: 3, uncollected: false, type: 'movie' }),
+      libraryParamUpdates({ q: 'matrix', sort: 'year', collectionID: 3, uncollected: false, type: 'movie', unwatched: true }),
     ).toEqual({
       q: 'matrix',
       sort: 'year',
       collection: '3',
       type: 'movie',
+      unwatched: '1',
     })
   })
 
   it('encodes the uncollected filter as the sentinel, ignoring any collectionID', () => {
     expect(
-      libraryParamUpdates({ q: '', sort: 'added', collectionID: 3, uncollected: true, type: '' }),
+      libraryParamUpdates({ q: '', sort: 'added', collectionID: 3, uncollected: true, type: '', unwatched: false }),
     ).toEqual({
       q: undefined,
       sort: undefined,
       collection: 'none',
       type: undefined,
+      unwatched: undefined,
     })
   })
 })

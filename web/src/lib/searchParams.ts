@@ -24,6 +24,8 @@ export interface LibraryUrlState {
   uncollected: boolean
   // All · Shows · Movies; '' is All.
   type: LibraryType
+  // Only titles not started yet (build ruling B14).
+  unwatched: boolean
 }
 
 /** Reads library filter state from URL search params, falling back to
@@ -38,7 +40,8 @@ export function parseLibraryParams(params: URLSearchParams): LibraryUrlState {
     collectionRaw && /^\d+$/.test(collectionRaw) ? Number(collectionRaw) : undefined
   const typeRaw = params.get('type')
   const type = VALID_TYPES.includes(typeRaw as LibraryType) ? (typeRaw as LibraryType) : ''
-  return { q, sort, collectionID, uncollected, type }
+  const unwatched = params.get('unwatched') === '1'
+  return { q, sort, collectionID, uncollected, type, unwatched }
 }
 
 function isLibrarySort(value: string | null): value is LibrarySort {
@@ -58,6 +61,7 @@ export function libraryParamUpdates(state: LibraryUrlState): Record<string, stri
         ? String(state.collectionID)
         : undefined,
     type: state.type ? state.type : undefined,
+    unwatched: state.unwatched ? '1' : undefined,
   }
 }
 

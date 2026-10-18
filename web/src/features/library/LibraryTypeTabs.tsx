@@ -39,3 +39,27 @@ export function LibraryTypeTabs({
     </div>
   )
 }
+
+/** Neutral on purpose: the screen's one amber accent stays on Upload and
+    the active collection chip. */
+export function UnwatchedToggle({ pressed, onChange }: { pressed: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={() => onChange(!pressed)}
+      className="group -my-3 inline-flex h-11 shrink-0 cursor-pointer items-center"
+    >
+      <span
+        className={[
+          'inline-flex h-7 items-center rounded-full border px-3 whitespace-nowrap',
+          pressed
+            ? 'bg-primary border-primary text-canvas font-medium'
+            : 'border-line-strong text-secondary group-hover:text-primary',
+        ].join(' ')}
+      >
+        Unwatched
+      </span>
+    </button>
+  )
+}

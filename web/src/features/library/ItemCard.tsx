@@ -4,7 +4,7 @@ import { Clapperboard } from 'lucide-react'
 import type { ItemSummary } from '../../api/types.ts'
 import type { CardStyle } from '../../theme/cardStyle.ts'
 import { formatDuration, progressPercent } from '../../lib/format.ts'
-import { CheckBadge, OfflineBadge } from '../../ui/index.ts'
+import { OfflineBadge } from '../../ui/index.ts'
 import { CardMeta, CardOverlay, ImagePlaceholder, ProgressEdge } from './cardParts.tsx'
 import { SelectableCard, type CardSelection } from './SelectableCard.tsx'
 import { useThumbRetry } from './useThumbRetry.ts'
@@ -101,7 +101,7 @@ function ItemThumb({
           <Clapperboard aria-hidden className="size-10" strokeWidth={1.5} />
         </ImagePlaceholder>
       )}
-      {!item.available ? <OfflineBadge /> : item.needs_check ? <CheckBadge /> : null}
+      {!item.available && <OfflineBadge />}
       {isNew && (
         <span className="bg-accent-fill text-on-accent absolute top-2 left-2 rounded-sm px-2 py-1 text-xs font-semibold">
           New

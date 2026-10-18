@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react'
 import { HardDrive } from 'lucide-react'
 
-/** Top-right status slot on an image card. One badge per card: Offline wins
-    over Check. */
+/** Top-right status slot on an image card. */
 export function CardBadge({ children }: { children: ReactNode }) {
   return (
     <span className="bg-raised text-secondary border-line absolute top-2 right-2 z-10 inline-flex h-6 items-center gap-1 rounded-sm border px-1.5 text-xs font-medium">
@@ -18,10 +17,6 @@ export function OfflineBadge() {
       Offline
     </CardBadge>
   )
-}
-
-export function CheckBadge() {
-  return <CardBadge>Check</CardBadge>
 }
 
 /** Inline form for meta lines and rows: `Offline` leads the line. */

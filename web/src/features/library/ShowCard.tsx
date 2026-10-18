@@ -4,7 +4,7 @@ import { Clapperboard, Tv } from 'lucide-react'
 import type { ShowSummary } from '../../api/types.ts'
 import type { CardStyle } from '../../theme/cardStyle.ts'
 import { formatEpisodeLabel, progressPercent } from '../../lib/format.ts'
-import { CheckBadge, OfflineBadge } from '../../ui/index.ts'
+import { OfflineBadge } from '../../ui/index.ts'
 import { CardMeta, CardOverlay, ImagePlaceholder, ProgressEdge } from './cardParts.tsx'
 import { SelectableCard, type CardSelection } from './SelectableCard.tsx'
 import { useThumbRetry } from './useThumbRetry.ts'
@@ -31,7 +31,7 @@ export function ShowCard({
   const backdrop = useThumbRetry(show.backdrop_url)
   const splash = !spineOnly && !show.has_progress && !backdrop.broken
   const offline = show.up_next ? !show.up_next.available : !show.available
-  const badge = offline ? <OfflineBadge /> : show.needs_check ? <CheckBadge /> : null
+  const badge = offline ? <OfflineBadge /> : null
   const minimal = cardStyle === 'minimal'
   const showPath = `/shows/${show.id}`
   const linkState = { from: libraryPath }

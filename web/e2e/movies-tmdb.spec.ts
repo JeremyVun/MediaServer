@@ -149,9 +149,9 @@ test('a movie card shows its TMDB backdrop, else its frame thumbnail', async ({ 
 
   const card = (title: string) => page.locator('[data-library-grid]').getByRole('link', { name: `Play ${title}` })
   await expect(card('Matched').locator('img')).toHaveAttribute('src', '/api/items/10/art?v=1')
-  await expect(card('Matched').getByText('Check')).toHaveCount(0)
   await expect(card('Unmatched').locator('img')).toHaveAttribute('src', '/api/items/11/thumb?v=1')
-  await expect(card('Unmatched').getByText('Check', { exact: true })).toBeVisible()
+  // B15: an unsure match carries no card badge; the item page's Check strip handles it.
+  await expect(card('Unmatched').getByText('Check')).toHaveCount(0)
   // Art that fails to load falls back to the frame.
   await expect(card('Broken art').locator('img')).toHaveAttribute('src', '/api/items/12/thumb?v=1')
 })

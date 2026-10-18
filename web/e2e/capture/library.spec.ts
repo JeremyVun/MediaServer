@@ -55,6 +55,10 @@ for (const [name, viewport] of [['phone', { width: 390, height: 844 }], ['deskto
       await page.screenshot({ path: `${OUT}/${tab.toLowerCase()}-${name}-${scheme}.png` })
     }
     await page.getByRole('tab', { name: 'All' }).click()
+    await page.getByRole('button', { name: 'Unwatched' }).click()
+    await page.waitForTimeout(800)
+    await page.screenshot({ path: `${OUT}/unwatched-${name}-${scheme}.png` })
+    await page.getByRole('button', { name: 'Unwatched' }).click()
     await page.locator('[data-library-grid]').scrollIntoViewIfNeeded()
     await page.waitForTimeout(600)
     await page.screenshot({ path: `${OUT}/library-grid-${name}-${scheme}.png`, fullPage: true })

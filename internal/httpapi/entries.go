@@ -77,6 +77,7 @@ func (s *Server) handleLibrary(w http.ResponseWriter, r *http.Request) {
 		CollectionID: int64(collectionID),
 		Uncollected:  boolQuery(r, "uncollected"),
 		InProgress:   boolQuery(r, "in_progress"),
+		Unwatched:    boolQuery(r, "unwatched"),
 		Query:        q.Get("q"),
 		Offset:       offset,
 		Limit:        limit,

@@ -52,6 +52,7 @@ export interface LibraryEntryFilters {
   type?: LibraryType
   collection_id?: number
   uncollected?: boolean
+  unwatched?: boolean
 }
 
 export function useHealth() {
@@ -236,6 +237,7 @@ export function useLibraryEntries(filters: LibraryEntryFilters) {
       if (filters.type) params.set('type', filters.type)
       if (filters.collection_id) params.set('collection_id', String(filters.collection_id))
       else if (filters.uncollected) params.set('uncollected', '1')
+      if (filters.unwatched) params.set('unwatched', '1')
       params.set('offset', String(pageParam))
       params.set('limit', String(PAGE_SIZE))
       return api<LibraryList>(`/api/library?${params}`)

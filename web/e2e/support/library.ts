@@ -88,7 +88,7 @@ export function showDetail(entry: ShowEntry, overrides: Partial<ShowDetail> = {}
 }
 
 export interface LibraryMock {
-  /** The grid, in server order; filtered here by `type` and `collection_id`. */
+  /** The grid, in server order; filtered here by `type`, `collection_id` and `unwatched`. */
   entries: LibraryEntry[]
   /** What `in_progress=1` returns. */
   continueWatching: LibraryEntry[]
@@ -155,10 +155,12 @@ export async function mockLibraryApi(
       }
       const type = params.get('type')
       const collectionID = Number(params.get('collection_id') ?? 0)
+      const unwatched = params.get('unwatched') === '1'
       const entries = mock.entries.filter(
         (entry) =>
           (type === 'show' ? entry.kind === 'show' : type === 'movie' ? entry.kind === 'item' && entry.type === 'movie' : true) &&
-          (!collectionID || entry.collection_ids.includes(collectionID)),
+          (!collectionID || entry.collection_ids.includes(collectionID)) &&
+          (!unwatched || notStarted(entry)),
       )
       await json(route, { total: entries.length, entries })
       return
@@ -198,6 +200,12 @@ export async function mockLibraryApi(
   })
 
   return log
+}
+
+/** B14's "not started": no progress on any episode, or no position and not completed. */
+function notStarted(entry: LibraryEntry): boolean {
+  if (entry.kind === 'show') return !entry.has_progress
+  return !entry.progress || (entry.progress.position_s <= 0 && !entry.progress.completed)
 }
 
 export async function json(route: Route, body: unknown, status = 200) {

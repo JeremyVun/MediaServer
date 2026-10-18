@@ -61,6 +61,7 @@ type ListEntriesOpts struct {
 	CollectionID int64
 	Uncollected  bool // ignored when CollectionID > 0
 	InProgress   bool
+	Unwatched    bool   // not started: no position and not completed; a show with no episode progress
 	Query        string // FTS over show and item titles; an episode hit surfaces its show
 	Offset       int
 	Limit        int // <=0 means default 60, capped at 500
@@ -110,6 +111,9 @@ func (s *Store) ListEntries(ctx context.Context, opts ListEntriesOpts) ([]Entry,
 		}
 		for _, k := range showKeys {
 			if opts.InProgress && !continueWatching(states[k.id]) {
+				continue
+			}
+			if opts.Unwatched && hasProgress(states[k.id]) {
 				continue
 			}
 			keys = append(keys, k)
@@ -303,6 +307,9 @@ func (s *Store) itemEntryKeys(ctx context.Context, opts ListEntriesOpts, match s
 	}
 	if opts.InProgress {
 		where += " AND wp.position_s > 0 AND wp.completed = 0"
+	}
+	if opts.Unwatched {
+		where += " AND COALESCE(wp.position_s, 0) <= 0 AND COALESCE(wp.completed, 0) = 0"
 	}
 	if match != "" {
 		where += " AND mi.id IN (SELECT rowid FROM items_fts WHERE items_fts MATCH ?)"
