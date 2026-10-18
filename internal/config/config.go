@@ -132,6 +132,27 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadTMDBToken reads only tmdb.read_access_token from the config file at
+// path, so a scratch server can use the owner's token without it being
+// copied anywhere. Errors never quote the file.
+func LoadTMDBToken(path string) (string, error) {
+	path, err := expandTilde(path)
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read tmdb token: %w", err)
+	}
+	var only struct {
+		TMDB TMDB `yaml:"tmdb"`
+	}
+	if yaml.Unmarshal(raw, &only) != nil {
+		return "", fmt.Errorf("read tmdb token from %s: invalid YAML", path)
+	}
+	return strings.TrimSpace(only.TMDB.ReadAccessToken), nil
+}
+
 func (c *Config) normalize() error {
 	var err error
 	if c.DataDir, err = expandTilde(c.DataDir); err != nil {

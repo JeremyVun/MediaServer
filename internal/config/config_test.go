@@ -68,6 +68,21 @@ func TestTMDBToken(t *testing.T) {
 	}
 }
 
+func TestLoadTMDBToken(t *testing.T) {
+	path := writeConfig(t, "server:\n  port: 8484\ntmdb:\n  read_access_token: \" secret-xyz \"\n")
+	got, err := LoadTMDBToken(path)
+	if err != nil || got != "secret-xyz" {
+		t.Fatalf("token = %q, %v", got, err)
+	}
+	bad := writeConfig(t, "tmdb:\n  read_access_token: [secret-xyz\n")
+	if _, err := LoadTMDBToken(bad); err == nil || strings.Contains(err.Error(), "secret-xyz") {
+		t.Errorf("bad yaml: %v", err)
+	}
+	if got, err := LoadTMDBToken(writeConfig(t, "server:\n  port: 1\n")); err != nil || got != "" {
+		t.Errorf("no tmdb key: %q, %v", got, err)
+	}
+}
+
 func TestLoadCreatesOwnedDirectories(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := Load(writeConfig(t, `

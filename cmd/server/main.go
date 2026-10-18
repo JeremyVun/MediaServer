@@ -49,11 +49,17 @@ func main() {
 
 func run() error {
 	configPath := flag.String("config", config.DefaultPath(), "path to config.yml")
+	tmdbTokenFrom := flag.String("tmdb-token-from", "", "take tmdb.read_access_token from this config file instead (scratch servers)")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		return err
+	}
+	if *tmdbTokenFrom != "" {
+		if cfg.TMDB.ReadAccessToken, err = config.LoadTMDBToken(*tmdbTokenFrom); err != nil {
+			return err
+		}
 	}
 
 	logger, closeLog, err := logging.Setup(cfg.LogDir(), cfg.Log.Level)
