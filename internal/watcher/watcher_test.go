@@ -291,8 +291,9 @@ func newWatcherStore(t *testing.T) (*store.Store, func()) {
 }
 
 type fakeJobs struct {
-	reconciles chan int64
-	probes     chan fakeProbe
+	reconciles    chan int64
+	probes        chan fakeProbe
+	trashMissings chan struct{}
 }
 
 type fakeProbe struct {
@@ -302,8 +303,9 @@ type fakeProbe struct {
 
 func newFakeJobs() *fakeJobs {
 	return &fakeJobs{
-		reconciles: make(chan int64, 16),
-		probes:     make(chan fakeProbe, 16),
+		reconciles:    make(chan int64, 16),
+		probes:        make(chan fakeProbe, 16),
+		trashMissings: make(chan struct{}, 16),
 	}
 }
 
@@ -315,6 +317,11 @@ func (j *fakeJobs) EnqueueReconcile(_ context.Context, rootID int64) (store.Job,
 func (j *fakeJobs) EnqueueProbe(_ context.Context, rootID int64, relPath string) (store.Job, error) {
 	j.probes <- fakeProbe{rootID: rootID, relPath: relPath}
 	return store.Job{ID: rootID, Type: "probe"}, nil
+}
+
+func (j *fakeJobs) EnqueueTrashMissing(context.Context) (store.Job, error) {
+	j.trashMissings <- struct{}{}
+	return store.Job{Type: "trash_missing"}, nil
 }
 
 func (j *fakeJobs) waitReconcile(t *testing.T, rootID int64) {
@@ -468,5 +475,189 @@ func TestWatcherWaitsForPreallocatedFileToStopChanging(t *testing.T) {
 	case extra := <-jobs.probes:
 		t.Fatalf("second probe %+v enqueued for one settled file", extra)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestWatcherRemovalMarksMissingAndQueuesTrashSweep(t *testing.T) {
+	st, closeDB := newWatcherStore(t)
+	defer closeDB()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rootPath := t.TempDir()
+	root, err := st.UpsertRoot(ctx, "A", rootPath)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	mediaPath := filepath.Join(rootPath, "movie.mp4")
+	if err := os.WriteFile(mediaPath, []byte("video bytes"), 0o644); err != nil {
+		t.Fatalf("write media: %v", err)
+	}
+	item, err := st.CreateItem(ctx, store.NewItem{Title: "Movie"})
+	if err != nil {
+		t.Fatalf("item: %v", err)
+	}
+	file, err := st.CreateFile(ctx, store.NewFile{
+		ItemID: item.ID, RootID: root.ID, RelPath: "movie.mp4", Size: 11, Mtime: time.Now(), Fingerprint: "abc",
+	})
+	if err != nil {
+		t.Fatalf("file: %v", err)
+	}
+
+	jobs := newFakeJobs()
+	streams := newFakeStreams()
+	manager := NewManager(Options{
+		Store:         st,
+		Jobs:          jobs,
+		Log:           slog.Default(),
+		Debounce:      5 * time.Millisecond,
+		MoveWindow:    25 * time.Millisecond,
+		StormBackstop: time.Hour,
+		StreamFactory: streams.factory,
+	})
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	jobs.waitReconcile(t, root.ID)
+	if err := os.Remove(mediaPath); err != nil {
+		t.Fatal(err)
+	}
+	streams.send(t, rootPath, streamEvent{Path: mediaPath})
+
+	select {
+	case <-jobs.trashMissings:
+	case <-time.After(2 * time.Second):
+		t.Fatal("removal queued no trash sweep")
+	}
+	got, err := st.GetFile(ctx, file.ID)
+	if err != nil || got.Status != "missing" {
+		t.Fatalf("file after removal = %+v %v, want missing", got, err)
+	}
+	var since *string
+	if err := st.DB().QueryRowContext(ctx, `SELECT missing_since FROM media_files WHERE id = ?`, file.ID).Scan(&since); err != nil || since == nil {
+		t.Fatalf("missing_since = %v %v, want set", since, err)
+	}
+}
+
+func TestRemovalCheckBlockedByPermissionsIsNotAMissingFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	st, closeDB := newWatcherStore(t)
+	defer closeDB()
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	root, err := st.UpsertRoot(ctx, "A", rootPath)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	locked := filepath.Join(rootPath, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mediaPath := filepath.Join(locked, "movie.mp4")
+	if err := os.WriteFile(mediaPath, []byte("video bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item, err := st.CreateItem(ctx, store.NewItem{Title: "Movie"})
+	if err != nil {
+		t.Fatalf("item: %v", err)
+	}
+	file, err := st.CreateFile(ctx, store.NewFile{
+		ItemID: item.ID, RootID: root.ID, RelPath: "locked/movie.mp4", Size: 11, Mtime: time.Now(), Fingerprint: "abc",
+	})
+	if err != nil {
+		t.Fatalf("file: %v", err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+
+	jobs := newFakeJobs()
+	manager := NewManager(Options{Store: st, Jobs: jobs, Log: slog.Default(), MoveWindow: time.Millisecond})
+	rw := &rootWatcher{manager: manager, root: root, timers: map[string]*time.Timer{}, quiescing: map[string]bool{}}
+	rw.handleRemoved(ctx, "locked/movie.mp4", mediaPath)
+
+	got, err := st.GetFile(ctx, file.ID)
+	if err != nil || got.Status != "online" {
+		t.Fatalf("file after a denied stat = %+v %v, want online", got, err)
+	}
+	select {
+	case <-jobs.trashMissings:
+		t.Fatal("a denied stat queued a trash sweep")
+	default:
+	}
+}
+
+func TestWatcherRestoresAutoTrashedItemWhenItsFileReturns(t *testing.T) {
+	st, closeDB := newWatcherStore(t)
+	defer closeDB()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rootPath := t.TempDir()
+	root, err := st.UpsertRoot(ctx, "A", rootPath)
+	if err != nil {
+		t.Fatalf("root: %v", err)
+	}
+	away := filepath.Join(t.TempDir(), "movie.mp4")
+	if err := os.WriteFile(away, []byte("same media bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := library.Fingerprint(away)
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, file, err := st.CreateItemWithFile(ctx, store.NewItem{Title: "Movie"}, store.NewFile{
+		RootID: root.ID, RelPath: "old.mp4", Size: int64(len("same media bytes")), Mtime: time.Now(), Fingerprint: fp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetFileStatus(ctx, file.ID, "missing"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := st.TrashMissingItem(ctx, item.ID, time.Now().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("auto-trash: %v %v", ok, err)
+	}
+
+	bus := events.NewBus()
+	eventsCh, stopEvents := bus.Subscribe()
+	defer stopEvents()
+	jobs := newFakeJobs()
+	streams := newFakeStreams()
+	manager := NewManager(Options{
+		Store:            st,
+		Jobs:             jobs,
+		Bus:              bus,
+		Log:              slog.Default(),
+		Debounce:         5 * time.Millisecond,
+		QuiesceInterval:  5 * time.Millisecond,
+		QuiesceStableFor: 15 * time.Millisecond,
+		StormBackstop:    time.Hour,
+		StreamFactory:    streams.factory,
+	})
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	jobs.waitReconcile(t, root.ID)
+	newPath := filepath.Join(rootPath, "renamed.mp4")
+	if err := os.Rename(away, newPath); err != nil {
+		t.Fatal(err)
+	}
+	streams.send(t, rootPath, streamEvent{Path: newPath})
+
+	ev := waitEvent(t, eventsCh, events.ItemAdded)
+	if s := ev.Payload.(store.ItemSummary); s.ID != item.ID {
+		t.Fatalf("item.added for %d, want %d", s.ID, item.ID)
+	}
+	got, err := st.GetItem(ctx, item.ID)
+	if err != nil || got.DeletedAt != nil {
+		t.Fatalf("item = %+v %v, want restored", got, err)
+	}
+	moved, err := st.GetFile(ctx, file.ID)
+	if err != nil || moved.RelPath != "renamed.mp4" || moved.Status != "online" {
+		t.Fatalf("file = %+v %v, want online at renamed.mp4", moved, err)
 	}
 }

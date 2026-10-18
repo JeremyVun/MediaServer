@@ -105,10 +105,11 @@ func (s *Store) SetFileStatus(ctx context.Context, id int64, status string) erro
 }
 
 // SetRootFilesStatus bulk-updates every file on a root — the unmount/remount
-// transition. Returns the number of files touched.
+// transition — except trashed ones, whose bytes stay in .trash for restore.
+// Returns the number of files touched.
 func (s *Store) SetRootFilesStatus(ctx context.Context, rootID int64, status string) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE media_files SET status = ? WHERE root_id = ?`, status, rootID)
+		`UPDATE media_files SET status = ? WHERE root_id = ? AND status <> 'trashed'`, status, rootID)
 	if err != nil {
 		return 0, err
 	}

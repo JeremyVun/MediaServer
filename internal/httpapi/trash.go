@@ -94,6 +94,11 @@ func (s *Server) handleRestoreItem(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publishItemEvent(r, events.ItemAdded, item.ID)
 	s.publishShowOf(item)
+	if s.jobs != nil {
+		if _, err := s.jobs.EnqueueTrashMissing(r.Context()); err != nil {
+			s.log.Error("enqueue trash missing after restore", "item_id", item.ID, "error", err)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": item.ID})
 }
 
@@ -161,9 +166,10 @@ func (s *Server) trashPlans(w http.ResponseWriter, r *http.Request, item store.I
 			return nil, false
 		}
 		if restoring {
+			// Not in .trash: the item was trashed because the file was
+			// already gone (ruling B16), so it comes back as it is.
 			if file.Status != "trashed" {
-				writeError(w, http.StatusConflict, "not_trashed", "file is not in trash")
-				return nil, false
+				continue
 			}
 		} else if file.Status != "online" {
 			writeError(w, http.StatusConflict, "file_unavailable", "file is not online")

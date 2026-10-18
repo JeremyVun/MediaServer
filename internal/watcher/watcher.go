@@ -33,6 +33,7 @@ const (
 type Enqueuer interface {
 	EnqueueReconcile(ctx context.Context, rootID int64) (store.Job, error)
 	EnqueueProbe(ctx context.Context, rootID int64, relPath string) (store.Job, error)
+	EnqueueTrashMissing(ctx context.Context) (store.Job, error)
 }
 
 type Manager struct {
@@ -376,6 +377,15 @@ func (m *Manager) enqueueProbe(ctx context.Context, rootID int64, relPath string
 	}
 }
 
+func (m *Manager) enqueueTrashMissing(ctx context.Context) {
+	if m.jobs == nil {
+		return
+	}
+	if _, err := m.jobs.EnqueueTrashMissing(ctx); err != nil && ctx.Err() == nil {
+		m.log.Error("enqueue trash missing", "error", err)
+	}
+}
+
 func (m *Manager) publish(event events.Event) {
 	if m.bus != nil {
 		m.bus.Publish(event)
@@ -392,6 +402,29 @@ func (m *Manager) publishItemUpdated(ctx context.Context, itemID int64) {
 		return
 	}
 	m.bus.Publish(events.Event{Type: events.ItemUpdated, Payload: summary})
+}
+
+// publishFileBack publishes an item whose file was just re-paired, first
+// restoring it if the missing-file sweep had trashed it (ruling B19).
+func (m *Manager) publishFileBack(ctx context.Context, itemID int64) {
+	restored, err := m.store.RestoreReturnedItem(ctx, itemID)
+	if err != nil {
+		m.log.Error("restore returned item", "item_id", itemID, "error", err)
+	}
+	if !restored {
+		m.publishItemUpdated(ctx, itemID)
+		return
+	}
+	summary, err := m.store.GetItemSummary(ctx, itemID)
+	if err != nil {
+		m.log.Error("hydrate watcher item event", "item_id", itemID, "error", err)
+		return
+	}
+	m.log.Info("restored from trash: file is back", "item_id", itemID, "title", summary.Title)
+	m.publish(events.Event{Type: events.ItemAdded, Payload: summary})
+	if summary.Show != nil {
+		m.publish(events.Event{Type: events.ShowUpdated, Payload: map[string]any{"id": summary.Show.ID}})
+	}
 }
 
 type rootWatcher struct {
@@ -581,7 +614,7 @@ func (rw *rootWatcher) tryMove(ctx context.Context, rel string, info os.FileInfo
 			rw.manager.log.Warn("move file row", "file_id", file.ID, "rel_path", rel, "error", err)
 			return false
 		}
-		rw.manager.publishItemUpdated(ctx, file.ItemID)
+		rw.manager.publishFileBack(ctx, file.ItemID)
 		return true
 	}
 	return false
@@ -611,7 +644,9 @@ func (rw *rootWatcher) handleRemoved(ctx context.Context, rel, path string) {
 		return
 	case <-timer.C:
 	}
-	if _, err := os.Stat(path); err == nil {
+	// Only a definite "no such file" is a removal; a permission or I/O error
+	// (TCC revoking access) must never read as one.
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	file, err := rw.manager.store.GetFileByLocation(ctx, rw.root.ID, rel)
@@ -629,6 +664,7 @@ func (rw *rootWatcher) handleRemoved(ctx context.Context, rel, path string) {
 		return
 	}
 	rw.manager.publishItemUpdated(ctx, file.ItemID)
+	rw.manager.enqueueTrashMissing(ctx)
 }
 
 func relPath(rootPath, path string) (string, error) {
