@@ -350,13 +350,13 @@ func TestArtDownscaledWithFFmpeg(t *testing.T) {
 	item := h.classify(h.item("Andor.S01E01.mkv", 2400).ID)
 	backdrop := h.svc.BackdropPath(*item.ShowID)
 	cfg, format := decodeConfig(t, backdrop)
-	if cfg.Width != ArtMaxWidth || cfg.Height != 640 || format != "jpeg" {
+	if cfg.Width != BackdropMaxWidth || cfg.Height != 640 || format != "jpeg" {
 		t.Fatalf("backdrop = %dx%d %s, want 2560x640 jpeg", cfg.Width, cfg.Height, format)
 	}
 	if got, _ := os.ReadFile(h.svc.PosterPath(*item.ShowID)); !bytes.Equal(got, smallPoster) {
 		t.Fatal("a poster within the cap was re-encoded")
 	}
-	if leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(backdrop), "*.download*")); len(leftovers) > 0 {
+	if leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(backdrop), ".art-*")); len(leftovers) > 0 {
 		t.Fatalf("temp files left: %v", leftovers)
 	}
 
@@ -364,8 +364,8 @@ func TestArtDownscaledWithFFmpeg(t *testing.T) {
 	h2.tv.images["/img/poster-1.jpg"] = lavfiJPEG(t, ffmpeg, 3000, 4500)
 	h2.tv.add(andorShow(), "andor")
 	item = h2.classify(h2.item("Andor.S01E01.mkv", 2400).ID)
-	if cfg, format := decodeConfig(t, h2.svc.PosterPath(*item.ShowID)); cfg.Width != ArtMaxWidth || format != "jpeg" {
-		t.Fatalf("oversized poster = %dx%d %s, want 2560 wide jpeg", cfg.Width, cfg.Height, format)
+	if cfg, format := decodeConfig(t, h2.svc.PosterPath(*item.ShowID)); cfg.Width != PosterMaxWidth || cfg.Height != 1020 || format != "jpeg" {
+		t.Fatalf("oversized poster = %dx%d %s, want 680x1020 jpeg", cfg.Width, cfg.Height, format)
 	}
 }
 

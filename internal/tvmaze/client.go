@@ -21,8 +21,8 @@ const (
 	DefaultRateLimit     = 20
 	DefaultRateWindow    = 10 * time.Second
 	DefaultMaxRetryAfter = 10 * time.Second
+	DefaultTimeout       = 10 * time.Second
 
-	requestTimeout = 10 * time.Second
 	// Backgrounds run up to 8K, so an image gets longer than an API call.
 	imageTimeout     = 60 * time.Second
 	maxJSONBytes     = 32 << 20
@@ -49,7 +49,9 @@ type Options struct {
 	// A 429 whose Retry-After exceeds this surfaces as ErrUnreachable
 	// instead of being waited out in-client.
 	MaxRetryAfter time.Duration
-	Log           *slog.Logger
+	// Timeout bounds one API request, body included (default 10 s).
+	Timeout time.Duration
+	Log     *slog.Logger
 }
 
 type Client struct {
@@ -57,7 +59,9 @@ type Client struct {
 	http          *http.Client
 	userAgent     string
 	maxRetryAfter time.Duration
+	timeout       time.Duration
 	limiter       *limiter
+	responses     *responses
 	log           *slog.Logger
 }
 
@@ -67,6 +71,8 @@ func New(o Options) *Client {
 		http:          o.HTTPClient,
 		userAgent:     o.UserAgent,
 		maxRetryAfter: o.MaxRetryAfter,
+		timeout:       o.Timeout,
+		responses:     newResponses(),
 		log:           o.Log,
 	}
 	if c.log == nil {
@@ -84,6 +90,9 @@ func New(o Options) *Client {
 	if c.maxRetryAfter == 0 {
 		c.maxRetryAfter = DefaultMaxRetryAfter
 	}
+	if c.timeout <= 0 {
+		c.timeout = DefaultTimeout
+	}
 	limit, window := o.RateLimit, o.RateWindow
 	if limit <= 0 {
 		limit = DefaultRateLimit
@@ -97,11 +106,18 @@ func New(o Options) *Client {
 
 func (c *Client) getJSON(ctx context.Context, path string, v any) error {
 	url := c.baseURL + path
-	var body []byte
-	err := c.get(ctx, url, requestTimeout, func(r io.Reader) error {
-		var err error
-		body, err = io.ReadAll(io.LimitReader(r, maxJSONBytes))
-		return err
+	body, err := c.responses.get(ctx, url, func(ctx context.Context) ([]byte, time.Duration, error) {
+		var body []byte
+		var ttl time.Duration
+		err := c.get(ctx, url, c.timeout, func(resp *http.Response) error {
+			var err error
+			body, err = io.ReadAll(io.LimitReader(resp.Body, maxJSONBytes))
+			if err == nil && json.Valid(body) {
+				ttl = freshFor(resp.Header)
+			}
+			return err
+		})
+		return body, ttl, err
 	})
 	if err != nil {
 		return err
@@ -114,7 +130,7 @@ func (c *Client) getJSON(ctx context.Context, path string, v any) error {
 
 // get issues a throttled GET and hands a 200 body to read. read runs inside
 // the per-request timeout, so a stalled body counts as unreachable.
-func (c *Client) get(ctx context.Context, url string, timeout time.Duration, read func(io.Reader) error) error {
+func (c *Client) get(ctx context.Context, url string, timeout time.Duration, read func(*http.Response) error) error {
 	for attempt := 0; ; attempt++ {
 		if err := c.limiter.wait(ctx); err != nil {
 			return fmt.Errorf("tvmaze: GET %s: %w", url, err)
@@ -131,7 +147,7 @@ func (c *Client) get(ctx context.Context, url string, timeout time.Duration, rea
 }
 
 // attempt returns a non-zero wait when TVmaze answered 429.
-func (c *Client) attempt(ctx context.Context, url string, timeout time.Duration, read func(io.Reader) error) (time.Duration, error) {
+func (c *Client) attempt(ctx context.Context, url string, timeout time.Duration, read func(*http.Response) error) (time.Duration, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
@@ -149,7 +165,7 @@ func (c *Client) attempt(ctx context.Context, url string, timeout time.Duration,
 
 	switch {
 	case resp.StatusCode == http.StatusOK:
-		if err := read(resp.Body); err != nil {
+		if err := read(resp); err != nil {
 			if errors.Is(err, errTooLarge) {
 				return 0, fmt.Errorf("tvmaze: GET %s: %w", url, err)
 			}
@@ -198,8 +214,8 @@ func (c *Client) FetchImage(ctx context.Context, url, dst string) error {
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 
-	err = c.get(ctx, url, imageTimeout, func(r io.Reader) error {
-		n, err := io.Copy(tmp, io.LimitReader(r, maxImageBytes+1))
+	err = c.get(ctx, url, imageTimeout, func(resp *http.Response) error {
+		n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxImageBytes+1))
 		if err == nil && n > maxImageBytes {
 			err = errTooLarge
 		}

@@ -29,6 +29,80 @@ type showQuery struct {
 	episode   int // 0: no episode to break a namesake tie with
 }
 
+func (q showQuery) same(o showQuery) bool {
+	sameYear := (q.year == nil) == (o.year == nil) && (q.year == nil || *q.year == *o.year)
+	return q.name == o.name && q.key == o.key && sameYear && q.season == o.season && q.episode == o.episode
+}
+
+// lookup is what TVmaze said about one show query, gathered before the
+// classifier lock is taken so the lock never waits on the network.
+type lookup struct {
+	q   showQuery
+	m   match
+	err error // TVmaze unreachable
+	// The confident match's show and episodes, fetched when no local show
+	// had that match yet.
+	show    *tvmaze.Show
+	showErr error
+}
+
+func (lk *lookup) answers(q showQuery) bool { return lk != nil && lk.q.same(q) }
+
+func (lk *lookup) fetched() bool { return lk.show != nil || lk.showErr != nil }
+
+// staleLookup: the catalog changed between asking TVmaze and taking the
+// lock, so the decision needs TVmaze's answer about q.
+type staleLookup struct{ q showQuery }
+
+func (staleLookup) Error() string { return "the catalog kept changing while TVmaze was asked" }
+
+// prepare looks q up unless its alias already settles the show.
+func (s *Service) prepare(ctx context.Context, q showQuery) (*lookup, error) {
+	alias, err := s.store.GetShowAlias(ctx, q.key)
+	if err == nil {
+		show, err := s.store.GetShow(ctx, alias.ShowID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+		if err == nil && !upgradable(alias, show) {
+			return nil, nil
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+	return s.lookUp(ctx, q)
+}
+
+// lookUp asks TVmaze about q without the lock. Only store errors and a
+// cancelled ctx fail it; TVmaze's errors are part of the answer.
+func (s *Service) lookUp(ctx context.Context, q showQuery) (*lookup, error) {
+	m, err := s.match(ctx, q)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil && !isTVmaze(err) {
+		return nil, err
+	}
+	lk := &lookup{q: q, m: m, err: err}
+	if err != nil || !m.confident {
+		return lk, nil
+	}
+	_, err = s.store.GetShowByTVmazeID(ctx, int64(m.result.ID))
+	if !errors.Is(err, store.ErrNotFound) {
+		return lk, err
+	}
+	show, err := s.tvmaze.Show(ctx, m.result.ID)
+	switch {
+	case ctx.Err() != nil:
+		return nil, ctx.Err()
+	case err != nil:
+		lk.showErr = tvmazeError{err}
+	default:
+		lk.show = &show
+	}
+	return lk, nil
+}
+
 // decision is the confident-match test's verdict on one set of results;
 // ties are the name matches it could not choose between, best first.
 type decision struct {

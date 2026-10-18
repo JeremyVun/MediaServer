@@ -60,6 +60,12 @@ type fakeTVmaze struct {
 	paths    []string          // every request path, in order
 	images   map[string][]byte // image path → body, else a placeholder
 	dead     map[string]bool   // image paths that 404
+	// maxAge > 0 sends TVmaze's Cache-Control: public, max-age=N.
+	maxAge int
+	// stalls holds requests for these URIs without an answer until the
+	// channel closes, as TVmaze's origin did; stalled reports each one.
+	stalls  map[string]chan struct{}
+	stalled chan string
 
 	down  atomic.Bool
 	hits  atomic.Int64
@@ -67,7 +73,8 @@ type fakeTVmaze struct {
 }
 
 func newFakeTVmaze(t *testing.T) *fakeTVmaze {
-	f := &fakeTVmaze{shows: map[int]tvShow{}, search: map[string][]int{}, images: map[string][]byte{}, dead: map[string]bool{}}
+	f := &fakeTVmaze{shows: map[int]tvShow{}, search: map[string][]int{}, images: map[string][]byte{}, dead: map[string]bool{},
+		stalls: map[string]chan struct{}{}, stalled: make(chan string, 16)}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
 	return f
@@ -102,6 +109,23 @@ func (f *fakeTVmaze) requests(prefix string) int {
 	return n
 }
 
+// stall holds requests for uri until the returned func releases them.
+func (f *fakeTVmaze) stall(uri string) (release func()) {
+	ch := make(chan struct{})
+	f.mu.Lock()
+	f.stalls[uri] = ch
+	f.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			delete(f.stalls, uri)
+			f.mu.Unlock()
+			close(ch)
+		})
+	}
+}
+
 func (f *fakeTVmaze) searched() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -118,8 +142,23 @@ func (f *fakeTVmaze) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
+	release, stalled := f.stalls[r.URL.RequestURI()]
+	f.mu.Unlock()
+	if stalled {
+		f.stalled <- r.URL.RequestURI()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		http.Error(w, "stalled", http.StatusGatewayTimeout)
+		return
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.paths = append(f.paths, r.URL.Path)
+	if f.maxAge > 0 {
+		w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(f.maxAge))
+	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.URL.Path == "/search/shows":

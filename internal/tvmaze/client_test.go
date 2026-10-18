@@ -3,6 +3,7 @@ package tvmaze
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -337,9 +338,9 @@ func TestThrottle(t *testing.T) {
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	for range 7 {
+	for i := range 7 {
 		wg.Go(func() {
-			if _, err := c.Search(context.Background(), "x"); err != nil {
+			if _, err := c.Search(context.Background(), fmt.Sprint("x", i)); err != nil {
 				t.Error(err)
 			}
 		})
