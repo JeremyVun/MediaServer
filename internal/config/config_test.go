@@ -50,6 +50,24 @@ func TestTVmazeBaseURL(t *testing.T) {
 	}
 }
 
+func TestTMDBToken(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(writeConfig(t, "data_dir: "+dir+"/data\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.TMDB.ReadAccessToken != "" {
+		t.Errorf("token default = %q, want empty", cfg.TMDB.ReadAccessToken)
+	}
+	cfg, err = Load(writeConfig(t, "data_dir: "+dir+"/data\ntmdb:\n  read_access_token: \"  abc.def  \"\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.TMDB.ReadAccessToken != "abc.def" {
+		t.Errorf("token = %q", cfg.TMDB.ReadAccessToken)
+	}
+}
+
 func TestLoadCreatesOwnedDirectories(t *testing.T) {
 	dir := t.TempDir()
 	cfg, err := Load(writeConfig(t, `

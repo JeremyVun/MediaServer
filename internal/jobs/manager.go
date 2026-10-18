@@ -33,6 +33,9 @@ const (
 	// the weekly sweep that queues it for shows still airing.
 	TypeShowRefresh   = "show_refresh"
 	TypeAiringRefresh = "airing_refresh"
+	// TypeMovieRefresh matches one movie on TMDB, or fills a matched one's
+	// summary and backdrop.
+	TypeMovieRefresh = "movie_refresh"
 
 	maxAttempts = 3
 
@@ -118,6 +121,10 @@ type ShowRefreshPayload struct {
 
 type AiringRefreshPayload struct{}
 
+type MovieRefreshPayload struct {
+	ItemID int64 `json:"item_id"`
+}
+
 func NewManager(opts Options) *Manager {
 	workers := opts.Workers
 	if workers <= 0 {
@@ -200,9 +207,16 @@ func (m *Manager) EnqueueShowRefresh(ctx context.Context, showID int64, runAt ti
 	return err
 }
 
+// EnqueueMovieRefresh implements classify.Scheduler.
+func (m *Manager) EnqueueMovieRefresh(ctx context.Context, itemID int64, runAt time.Time) error {
+	_, err := m.enqueueAt(ctx, TypeMovieRefresh, MovieRefreshPayload{ItemID: itemID}, runAt)
+	return err
+}
+
 // EnqueueBackfill runs at boot: classify every live item still unclassified
-// (the whole library on the first boot after the shows upgrade), and probe
-// every online file whose chapters were never read.
+// (the whole library on the first boot after the shows upgrade), match on
+// TMDB every movie never checked when a token is set, and probe every online
+// file whose chapters were never read.
 func (m *Manager) EnqueueBackfill(ctx context.Context) error {
 	if m.classify != nil {
 		ids, err := m.store.ListUnclassifiedItemIDs(ctx)
@@ -216,6 +230,20 @@ func (m *Manager) EnqueueBackfill(ctx context.Context) error {
 		}
 		if len(ids) > 0 {
 			m.log.Info("classify backfill queued", "items", len(ids))
+		}
+	}
+	if m.classify != nil && m.classify.TMDBConfigured() {
+		ids, err := m.store.ListMoviesAwaitingTMDB(ctx)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := m.EnqueueMovieRefresh(ctx, id, time.Now()); err != nil {
+				return err
+			}
+		}
+		if len(ids) > 0 {
+			m.log.Info("TMDB movie backfill queued", "items", len(ids))
 		}
 	}
 	files, err := m.store.ListFilesNeedingChapters(ctx)
@@ -391,6 +419,12 @@ func (m *Manager) handleJob(ctx context.Context, job store.Job) error {
 		return m.handleShowRefresh(ctx, payload.ShowID)
 	case TypeAiringRefresh:
 		return m.handleAiringRefresh(ctx)
+	case TypeMovieRefresh:
+		var payload MovieRefreshPayload
+		if err := json.Unmarshal([]byte(job.Payload), &payload); err != nil {
+			return Permanent(fmt.Errorf("decode movie refresh payload: %w", err))
+		}
+		return m.handleMovieRefresh(ctx, payload.ItemID)
 	default:
 		return Permanent(fmt.Errorf("unknown job type %q", job.Type))
 	}
@@ -402,6 +436,17 @@ func (m *Manager) handleShowRefresh(ctx context.Context, showID int64) error {
 	}
 	err := m.classify.RefreshShow(ctx, showID)
 	if errors.Is(err, classify.ErrUnreachable) {
+		return RetryLater(err, classify.UnreachableRetry)
+	}
+	return err
+}
+
+func (m *Manager) handleMovieRefresh(ctx context.Context, itemID int64) error {
+	if m.classify == nil {
+		return Permanent(errors.New("classifier not configured"))
+	}
+	err := m.classify.RefreshMovie(ctx, itemID)
+	if errors.Is(err, classify.ErrTMDBUnreachable) {
 		return RetryLater(err, classify.UnreachableRetry)
 	}
 	return err

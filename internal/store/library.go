@@ -37,6 +37,8 @@ type ItemSummary struct {
 	Episode       *int
 	EpisodeEnd    *int
 	NeedsCheck    bool
+	TMDBID        *int64
+	ArtAt         *string
 }
 
 type SearchItemsOpts struct {
@@ -271,7 +273,8 @@ func summarySelect() string {
 		       MAX(mf.duration_s) AS duration_s,
 		       CASE WHEN SUM(CASE WHEN mf.status = 'online' AND lr.online = 1 THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END AS available,
 		       wp.position_s, wp.duration_s, wp.completed, wp.updated_at,
-		       sh.id, sh.title, mi.season, mi.episode, mi.episode_end, mi.needs_check
+		       sh.id, sh.title, mi.season, mi.episode, mi.episode_end, mi.needs_check,
+		       mi.tmdb_id, mi.art_at
 		FROM media_items mi
 		LEFT JOIN media_files mf ON mf.item_id = mi.id
 		LEFT JOIN library_roots lr ON lr.id = mf.root_id
@@ -288,12 +291,12 @@ func scanSummaries(rows *sql.Rows) ([]ItemSummary, error) {
 		var duration sql.NullFloat64
 		var available int
 		var progressPos, progressDur sql.NullFloat64
-		var completed, showID, season, episode, episodeEnd sql.NullInt64
-		var progressAt, showTitle sql.NullString
+		var completed, showID, season, episode, episodeEnd, tmdbID sql.NullInt64
+		var progressAt, showTitle, artAt sql.NullString
 		var needsCheck int
 		if err := rows.Scan(&it.ID, &it.Type, &it.Title, &year, &it.CreatedAt, &duration, &available,
 			&progressPos, &progressDur, &completed, &progressAt,
-			&showID, &showTitle, &season, &episode, &episodeEnd, &needsCheck); err != nil {
+			&showID, &showTitle, &season, &episode, &episodeEnd, &needsCheck, &tmdbID, &artAt); err != nil {
 			return nil, err
 		}
 		if showID.Valid {
@@ -303,6 +306,8 @@ func scanSummaries(rows *sql.Rows) ([]ItemSummary, error) {
 		it.Episode = intPtr(episode)
 		it.EpisodeEnd = intPtr(episodeEnd)
 		it.NeedsCheck = needsCheck != 0
+		it.TMDBID = int64Ptr(tmdbID)
+		it.ArtAt = stringPtr(artAt)
 		if year.Valid {
 			y := int(year.Int64)
 			it.Year = &y

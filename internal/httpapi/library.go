@@ -27,6 +27,8 @@ type itemSummaryResponse struct {
 	DurationS     *float64          `json:"duration_s"`
 	CreatedAt     string            `json:"created_at"`
 	ThumbURL      string            `json:"thumb_url"`
+	ArtURL        *string           `json:"art_url"`
+	TMDBID        *int64            `json:"tmdb_id"`
 	Available     bool              `json:"available"`
 	Progress      *progressResponse `json:"progress,omitempty"`
 	CollectionIDs []int64           `json:"collection_ids"`
@@ -62,6 +64,8 @@ type itemDetailResponse struct {
 	UpdatedAt     string            `json:"updated_at"`
 	DeletedAt     *string           `json:"deleted_at"`
 	ThumbURL      string            `json:"thumb_url"`
+	ArtURL        *string           `json:"art_url"`
+	TMDBID        *int64            `json:"tmdb_id"`
 	CollectionIDs []int64           `json:"collection_ids"`
 	Progress      *progressResponse `json:"progress,omitempty"`
 	Files         []fileResponse    `json:"files"`
@@ -331,6 +335,8 @@ func (s *Server) detailResponse(w http.ResponseWriter, r *http.Request, item sto
 		fileResponses = append(fileResponses, fileToResponse(file, streams))
 	}
 	resp := itemToDetailResponse(item, s.thumbURL(summary), summary.CollectionIDs, progress, fileResponses)
+	resp.ArtURL = s.itemArtURL(item.ID, item.ArtAt)
+	resp.TMDBID = item.TMDBID
 	resp.episodeFields = episodeFieldsOf(summary)
 	return resp, true
 }
@@ -406,6 +412,8 @@ func (s *Server) itemSummaries(items []store.ItemSummary) []itemSummaryResponse 
 			DurationS:     item.DurationS,
 			CreatedAt:     item.CreatedAt,
 			ThumbURL:      s.thumbURL(item),
+			ArtURL:        s.itemArtURL(item.ID, item.ArtAt),
+			TMDBID:        item.TMDBID,
 			Available:     item.Available,
 			Progress:      progress,
 			CollectionIDs: item.CollectionIDs,

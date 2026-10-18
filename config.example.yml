@@ -6,7 +6,7 @@ server:
   bind: "0.0.0.0"
   port: 8484
 
-data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, show art (art/), logs
+data_dir: "~/media-server/data"        # sqlite db, thumbnail cache, show and movie art (art/), logs
 
 # Transcode working files (HLS segments, keyframe indexes). Defaults to the
 # internal SSD. To keep it off the SSD, point it at a hidden directory on a
@@ -44,6 +44,14 @@ trash:
 # for a test double or a proxy. Artwork is cached under data_dir/art.
 tvmaze:
   base_url: "https://api.tvmaze.com"
+
+# Movie descriptions and backdrops come from TMDB, optionally. Paste your
+# TMDB "API Read Access Token" (account settings → API) to turn it on; it is
+# sent only as a Bearer header to api.themoviedb.org and never logged or
+# returned by the API. Empty = no TMDB requests at all. Takes effect on the
+# next restart, which also matches every movie not yet checked.
+tmdb:
+  read_access_token: ""
 
 log:
   level: "info"                        # debug | info | warn | error

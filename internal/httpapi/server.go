@@ -17,6 +17,7 @@ import (
 	"github.com/JeremyVun/MediaServer/internal/jobs"
 	"github.com/JeremyVun/MediaServer/internal/playback"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tmdb"
 	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 )
 
@@ -34,6 +35,7 @@ type Server struct {
 	jobs          *jobs.Manager
 	classifier    *classify.Service
 	tvmaze        *tvmaze.Client
+	tmdb          *tmdb.Client
 	semantic      SemanticProbe
 	rootLifecycle RootLifecycle
 	version       string
@@ -55,6 +57,7 @@ type Options struct {
 	Jobs          *jobs.Manager
 	Classifier    *classify.Service
 	TVmaze        *tvmaze.Client // the process-wide client: its throttle is shared with classify
+	TMDB          *tmdb.Client   // likewise; nil when no token is configured
 	Semantic      SemanticProbe
 	RootLifecycle RootLifecycle
 	Version       string
@@ -86,6 +89,7 @@ func NewServer(opts Options) *Server {
 		jobs:          opts.Jobs,
 		classifier:    opts.Classifier,
 		tvmaze:        opts.TVmaze,
+		tmdb:          opts.TMDB,
 		semantic:      opts.Semantic,
 		rootLifecycle: opts.RootLifecycle,
 		version:       opts.Version,
@@ -115,6 +119,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/items/{id}/play", s.handlePlayItem)
 	mux.HandleFunc("PUT /api/items/{id}/progress", s.handlePutProgress)
 	mux.HandleFunc("GET /api/items/{id}/thumb", s.handleItemThumb)
+	mux.HandleFunc("GET /api/items/{id}/art", s.handleItemArt)
+	mux.HandleFunc("GET /api/items/{id}/match-search", s.handleItemMatchSearch)
+	mux.HandleFunc("POST /api/items/{id}/match", s.handleItemMatch)
 	mux.HandleFunc("GET /api/files/{id}/stream", s.handleFileStream)
 	mux.HandleFunc("GET /api/files/{id}/subs/{name}", s.handleFileSubtitle)
 	mux.HandleFunc("GET /api/sessions/{sid}/master.m3u8", s.handleHLSPlaylist)

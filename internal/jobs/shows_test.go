@@ -104,6 +104,11 @@ JSON
 
 func newShowsFixture(t *testing.T, extra Options) *showsFixture {
 	t.Helper()
+	return newShowsFixtureWith(t, extra, nil)
+}
+
+func newShowsFixtureWith(t *testing.T, extra Options, tune func(*classify.Options)) *showsFixture {
+	t.Helper()
 	ctx := context.Background()
 	st := newTestStore(t)
 	root, err := st.UpsertRoot(ctx, "Media", t.TempDir())
@@ -115,10 +120,14 @@ func newShowsFixture(t *testing.T, extra Options) *showsFixture {
 	t.Cleanup(bus.Close)
 	evs, cancel := bus.Subscribe()
 	t.Cleanup(cancel)
-	cls := classify.New(classify.Options{
+	clsOpts := classify.Options{
 		Store: st, Bus: bus, Log: quiet, ArtDir: t.TempDir(),
 		TVmaze: tvmaze.New(tvmaze.Options{BaseURL: tv.srv.URL, RateLimit: 10000, RateWindow: time.Second}),
-	})
+	}
+	if tune != nil {
+		tune(&clsOpts)
+	}
+	cls := classify.New(clsOpts)
 	opts := extra
 	opts.Store, opts.Bus, opts.Log, opts.Classifier = st, bus, quiet, cls
 	opts.FFprobe = testScript(t, "ffprobe", fakeFFprobe)

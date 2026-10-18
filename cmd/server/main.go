@@ -31,6 +31,7 @@ import (
 	"github.com/JeremyVun/MediaServer/internal/playback"
 	"github.com/JeremyVun/MediaServer/internal/semantic"
 	"github.com/JeremyVun/MediaServer/internal/store"
+	"github.com/JeremyVun/MediaServer/internal/tmdb"
 	"github.com/JeremyVun/MediaServer/internal/tvmaze"
 	"github.com/JeremyVun/MediaServer/internal/watcher"
 	webdist "github.com/JeremyVun/MediaServer/web"
@@ -112,12 +113,22 @@ func run() error {
 		UserAgent: "media-server/" + version,
 		Log:       logger,
 	})
+	var tmdbClient *tmdb.Client
+	if cfg.TMDB.ReadAccessToken != "" {
+		tmdbClient = tmdb.New(tmdb.Options{
+			Token:     cfg.TMDB.ReadAccessToken,
+			UserAgent: "media-server/" + version,
+			Log:       logger,
+		})
+		logger.Info("TMDB movie metadata on")
+	}
 	sol := &semantic.Classifier{}
 	classifier := classify.New(classify.Options{
 		Store:  st,
 		Bus:    bus,
 		Log:    logger,
 		TVmaze: tvmazeClient,
+		TMDB:   tmdbClient,
 		Sol:    sol,
 		ArtDir: cfg.ArtDir(),
 		FFmpeg: cfg.Transcode.FFmpeg,
@@ -166,6 +177,7 @@ func run() error {
 		Jobs:          jobManager,
 		Classifier:    classifier,
 		TVmaze:        tvmazeClient,
+		TMDB:          tmdbClient,
 		Semantic:      sol,
 		RootLifecycle: watchManager,
 		Version:       version,
