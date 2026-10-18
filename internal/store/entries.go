@@ -48,7 +48,8 @@ type UpNextEpisode struct {
 	Episode    int
 	EpisodeEnd *int
 	Title      string
-	Available  bool // false = offline; still the true next episode (ruling M10)
+	Available  bool     // false = offline; still the true next episode (ruling M10)
+	DurationS  *float64 // longest probed file; nil until probed
 	Progress   *Progress
 }
 
@@ -378,6 +379,7 @@ type episodeRow struct {
 	state     library.EpisodeState
 	title     string
 	createdAt string
+	durationS *float64
 	progress  *Progress
 }
 
@@ -394,6 +396,7 @@ func (s *Store) episodeRows(ctx context.Context, showID int64) (map[int64][]epis
 		SELECT mi.show_id, mi.id, mi.title, mi.created_at,
 		       COALESCE(mi.season, 1), COALESCE(mi.episode, 0), mi.episode_end,
 		       CASE WHEN SUM(CASE WHEN mf.status = 'online' AND lr.online = 1 THEN 1 ELSE 0 END) > 0 THEN 1 ELSE 0 END,
+		       MAX(mf.duration_s),
 		       wp.position_s, wp.duration_s, wp.completed, wp.updated_at
 		FROM media_items mi
 		LEFT JOIN media_files mf ON mf.item_id = mi.id
@@ -412,12 +415,15 @@ func (s *Store) episodeRows(ctx context.Context, showID int64) (map[int64][]epis
 		var r episodeRow
 		var episodeEnd, completed sql.NullInt64
 		var available int
-		var position, duration sql.NullFloat64
+		var fileDuration, position, duration sql.NullFloat64
 		var updatedAt sql.NullString
 		if err := rows.Scan(&show, &r.state.ItemID, &r.title, &r.createdAt,
-			&r.state.Season, &r.state.Episode, &episodeEnd, &available,
+			&r.state.Season, &r.state.Episode, &episodeEnd, &available, &fileDuration,
 			&position, &duration, &completed, &updatedAt); err != nil {
 			return nil, err
+		}
+		if fileDuration.Valid {
+			r.durationS = &fileDuration.Float64
 		}
 		r.state.EpisodeEnd = int(episodeEnd.Int64)
 		r.state.Available = available != 0
@@ -526,6 +532,7 @@ func buildShowSummary(show Show, episodes []episodeRow) *ShowSummary {
 			Episode:   next.Episode,
 			Title:     row.title,
 			Available: next.Available,
+			DurationS: row.durationS,
 			Progress:  row.progress,
 		}
 		if next.EpisodeEnd > 0 {

@@ -159,6 +159,7 @@ func TestListEntriesProgressAndSummaries(t *testing.T) {
 	l := newCatalog(t)
 	l.progress(l.andorEps[0], 3000, 3000, true, "2026-07-01 20:00:00")
 	l.progress(l.belowEps[0], 100, 3000, false, "2026-09-01 20:00:00")
+	l.exec(`UPDATE media_files SET duration_s = NULL WHERE item_id = ?`, l.belowEps[0].ID)
 	l.progress(l.darkEp, 3000, 3000, true, "2026-06-01 20:00:00")
 	l.progress(l.zodiac, 100, 9000, false, "2026-08-01 20:00:00")
 	l.progress(l.clip, 60, 60, true, "2026-05-01 20:00:00")
@@ -181,10 +182,10 @@ func TestListEntriesProgressAndSummaries(t *testing.T) {
 		t.Errorf("collection ids andor %v below %v", andor.CollectionIDs, below.CollectionIDs)
 	}
 	if up := andor.UpNext; up == nil || up.ItemID != l.andorEps[1].ID || up.Title != "That Would Be Me" ||
-		up.Season != 1 || up.Episode != 2 || !up.Available || up.Progress != nil {
+		up.Season != 1 || up.Episode != 2 || !up.Available || up.Progress != nil || up.DurationS == nil || *up.DurationS != 3000 {
 		t.Errorf("andor up next = %+v", andor.UpNext)
 	}
-	if up := below.UpNext; up == nil || up.ItemID != l.belowEps[0].ID || up.Progress == nil || up.Progress.PositionS != 100 {
+	if up := below.UpNext; up == nil || up.ItemID != l.belowEps[0].ID || up.Progress == nil || up.Progress.PositionS != 100 || up.DurationS != nil {
 		t.Errorf("below up next = %+v", below.UpNext)
 	}
 	if dark.UpNext != nil || !dark.NeedsCheck || len(dark.CollectionIDs) != 0 {

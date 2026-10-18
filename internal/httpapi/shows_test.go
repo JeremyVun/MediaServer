@@ -328,7 +328,8 @@ func TestLibraryUnionSortsAndPages(t *testing.T) {
 	lib = f.expectLibrary("in_progress=1&sort=watched", 2, "Zodiac", "show:Andor")
 	andor := lib.Entries[1]
 	if !andor.HasProgress || andor.UpNext == nil || andor.UpNext.ItemID != f.andorEps[1].ID ||
-		andor.UpNext.Title != "That Would Be Me" || !andor.UpNext.Available || andor.UpNext.Episode != 2 {
+		andor.UpNext.Title != "That Would Be Me" || !andor.UpNext.Available || andor.UpNext.Episode != 2 ||
+		andor.UpNext.DurationS == nil || *andor.UpNext.DurationS != 3000 {
 		t.Fatalf("continue-watching show = %+v up_next %+v", andor, andor.UpNext)
 	}
 

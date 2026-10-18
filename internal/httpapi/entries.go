@@ -51,6 +51,7 @@ type upNextResponse struct {
 	EpisodeEnd *int              `json:"episode_end"`
 	Title      string            `json:"title"`
 	Available  bool              `json:"available"`
+	DurationS  *float64          `json:"duration_s"`
 	ThumbURL   string            `json:"thumb_url"`
 	Progress   *progressResponse `json:"progress,omitempty"`
 }
@@ -160,6 +161,7 @@ func (s *Server) showSummaries(ctx context.Context, shows []store.ShowSummary) (
 				EpisodeEnd: up.EpisodeEnd,
 				Title:      up.Title,
 				Available:  up.Available,
+				DurationS:  up.DurationS,
 				ThumbURL:   s.thumbURL(store.ItemSummary{ID: up.ItemID, FileIDs: fileIDs[up.ItemID]}),
 				Progress:   progressToResponse(up.Progress),
 			}
