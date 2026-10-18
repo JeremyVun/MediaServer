@@ -344,3 +344,34 @@ func TestReorderLeavesHiddenRowsInPlace(t *testing.T) {
 	}
 	l.expect("full reorder", store.ListEntriesOpts{CollectionID: l.toWatch.ID}, "Zodiac", "clip", "show:Below", "show:Andor")
 }
+
+func TestListEntriesUnwatched(t *testing.T) {
+	l := newCatalog(t)
+	alien := l.item("movie", "Alien", 7000)
+	l.added(alien, "2026-02-10 00:00:00")
+	brazil := l.item("movie", "Brazil", 8000)
+	l.added(brazil, "2026-02-05 00:00:00")
+	if err := l.s.AddItemToCollection(l.ctx, l.toWatch.ID, alien.ID); err != nil {
+		t.Fatal(err)
+	}
+	l.progress(l.andorEps[0], 3000, 3000, true, "2026-07-01 20:00:00")
+	l.progress(l.darkEp, 0, 3000, false, "2026-07-02 20:00:00")
+	l.progress(l.zodiac, 100, 9000, false, "2026-08-01 20:00:00")
+	l.progress(brazil, 8000, 8000, true, "2026-08-02 20:00:00")
+	l.progress(l.clip, 0, 60, false, "2026-08-03 20:00:00")
+
+	unwatched := func(o store.ListEntriesOpts) store.ListEntriesOpts { o.Unwatched = true; return o }
+	l.expect("not started: unstarted show, position-0 rows, pending episode, unstarted movie", unwatched(store.ListEntriesOpts{}),
+		"Alien", "show:Below", "Silo S01E01", "clip", "show:Dark")
+	l.expect("movies", unwatched(store.ListEntriesOpts{Type: "movie"}), "Alien")
+	l.expect("shows", unwatched(store.ListEntriesOpts{Type: "show"}), "show:Below", "show:Dark")
+	l.expect("collection keeps its order; Andor is started through another episode", unwatched(store.ListEntriesOpts{CollectionID: l.toWatch.ID}),
+		"show:Below", "Alien")
+	l.expect("uncollected", unwatched(store.ListEntriesOpts{Uncollected: true}), "Silo S01E01", "clip", "show:Dark")
+	l.expect("search", unwatched(store.ListEntriesOpts{Query: "zod"}))
+
+	got, total := l.list(unwatched(store.ListEntriesOpts{Offset: 1, Limit: 2}))
+	if !reflect.DeepEqual(got, []string{"show:Below", "Silo S01E01"}) || total != 5 {
+		t.Errorf("unwatched page = %v total %d", got, total)
+	}
+}

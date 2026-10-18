@@ -36,10 +36,11 @@ import {
   parseLibraryParams,
   withParamUpdates,
   type LibraryType,
+  type LibraryUrlState,
 } from '../../lib/searchParams.ts'
 import { ContinueWatchingRow } from './ContinueWatchingRow.tsx'
 import { ItemCard } from './ItemCard.tsx'
-import { LibraryTypeTabs } from './LibraryTypeTabs.tsx'
+import { LibraryTypeTabs, UnwatchedToggle } from './LibraryTypeTabs.tsx'
 import { ShowCard } from './ShowCard.tsx'
 import { CollectionListPicker } from './CollectionListPicker.tsx'
 import {
@@ -68,6 +69,7 @@ export function LibraryPage() {
   const collectionID = urlState.collectionID
   const uncollected = urlState.uncollected
   const type = urlState.type
+  const unwatched = urlState.unwatched
 
   // 3.3: q/sort/collection live in the URL so the library survives a
   // round-trip and is shareable. `query` is local so typing feels instant;
@@ -99,38 +101,17 @@ export function LibraryPage() {
     }, 150)
   }
 
-  const setSort = (next: LibraryEntryFilters['sort']) =>
-    setSearchParams(
-      (prev) =>
-        withParamUpdates(
-          prev,
-          libraryParamUpdates({ q: urlState.q, sort: next ?? 'added', collectionID, uncollected, type }),
-        ),
-      { replace: true },
-    )
-  const setType = (next: LibraryType) =>
-    setSearchParams(
-      (prev) =>
-        withParamUpdates(prev, libraryParamUpdates({ q: urlState.q, sort, collectionID, uncollected, type: next })),
-      { replace: true },
-    )
+  const updateParams = (next: Partial<LibraryUrlState>) =>
+    setSearchParams((prev) => withParamUpdates(prev, libraryParamUpdates({ ...urlState, ...next })), {
+      replace: true,
+    })
+  const setSort = (next: LibraryEntryFilters['sort']) => updateParams({ sort: next ?? 'added' })
+  const setType = (next: LibraryType) => updateParams({ type: next })
+  const setUnwatched = (next: boolean) => updateParams({ unwatched: next })
   // The collection filter is one of three mutually exclusive pills: undefined
   // (All), 'none' (Unsorted), or a specific collection id.
   const setCollectionFilter = (next: number | 'none' | undefined) =>
-    setSearchParams(
-      (prev) =>
-        withParamUpdates(
-          prev,
-          libraryParamUpdates({
-            q: urlState.q,
-            sort,
-            collectionID: typeof next === 'number' ? next : undefined,
-            uncollected: next === 'none',
-            type,
-          }),
-        ),
-      { replace: true },
-    )
+    updateParams({ collectionID: typeof next === 'number' ? next : undefined, uncollected: next === 'none' })
   const pillClass = (active: boolean) =>
     [
       'border-line rounded-full border px-3 py-1.5 text-sm',
@@ -143,7 +124,7 @@ export function LibraryPage() {
   const libraryPath = (() => {
     const qs = withParamUpdates(
       searchParams,
-      libraryParamUpdates({ q: query, sort, collectionID, uncollected, type }),
+      libraryParamUpdates({ ...urlState, q: query }),
     ).toString()
     return qs ? `/?${qs}` : '/'
   })()
@@ -156,6 +137,7 @@ export function LibraryPage() {
     type: type || undefined,
     collection_id: collectionID,
     uncollected,
+    unwatched,
   }
   const library = useLibraryEntries(filters)
   const collections = useCollections()
@@ -424,6 +406,7 @@ export function LibraryPage() {
     !library.isPending &&
     entries.length === 0 &&
     !type &&
+    !unwatched &&
     !urlState.q &&
     collectionID == null &&
     !uncollected
@@ -572,7 +555,10 @@ export function LibraryPage() {
 
       {!library.isError && !libraryEmpty && (
         <div className="mb-4 flex items-center justify-between text-sm text-secondary">
-          <LibraryTypeTabs value={type} onChange={setType} />
+          <div className="flex items-center gap-5">
+            <LibraryTypeTabs value={type} onChange={setType} />
+            <UnwatchedToggle pressed={unwatched} onChange={setUnwatched} />
+          </div>
           <div className="flex items-center gap-4">
             {urlState.q && <span className="hidden sm:inline">Search results for "{urlState.q}"</span>}
             {!selectionActive && entries.length > 0 && (
@@ -596,15 +582,17 @@ export function LibraryPage() {
           text={
             urlState.q
               ? 'No matching videos'
-              : type === 'show'
-                ? 'No shows'
-                : type === 'movie'
-                  ? 'No movies'
-                  : uncollected
-                    ? 'Everything is in a collection'
-                    : collectionID != null
-                      ? 'Nothing in this collection'
-                      : 'Library is empty'
+              : unwatched
+                ? "You've started everything here"
+                : type === 'show'
+                  ? 'No shows'
+                  : type === 'movie'
+                    ? 'No movies'
+                    : uncollected
+                      ? 'Everything is in a collection'
+                      : collectionID != null
+                        ? 'Nothing in this collection'
+                        : 'Library is empty'
           }
         />
       )}

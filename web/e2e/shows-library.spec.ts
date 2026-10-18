@@ -60,11 +60,12 @@ test('the mixed grid renders splash, spine, movie and pending-episode cards', as
   await expect(still).toHaveAttribute('href', '/watch/202')
   await expect(still).toContainText('S2 E2')
 
-  // No poster and no art: the spine is still there, and the card is flagged.
+  // No poster and no art: the spine is still there. A flagged show carries no
+  // card badge (B15).
   const monsterSpine = cards.getByRole('link', { name: 'Open Monster' })
   await expect(monsterSpine).toHaveAttribute('href', '/shows/3')
   await expect(monsterSpine.locator('img')).toHaveCount(0)
-  await expect(monsterSpine.locator('..').getByText('Check', { exact: true })).toBeVisible()
+  await expect(monsterSpine.locator('..').getByText('Check')).toHaveCount(0)
 
   // An offline up-next opens the show page and reads Offline.
   const offlineStill = cards.getByRole('link', { name: 'Open Invincible S1 E5' })
