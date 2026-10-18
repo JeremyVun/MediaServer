@@ -128,12 +128,14 @@ func New(o Options) *Client {
 func (c *Client) Configured() bool { return c != nil && c.token != "" }
 
 // Movie is a search result or a movie's details. Year is 0 when TMDB has
-// no release date; the paths are "" when TMDB has no such image.
+// no release date; the paths are "" when TMDB has no such image. Runtime
+// (minutes) comes only with details, and is 0 when unknown.
 type Movie struct {
 	ID            int
 	Title         string
 	OriginalTitle string
 	Year          int
+	Runtime       int
 	Overview      string
 	BackdropPath  string
 	PosterPath    string
@@ -144,6 +146,7 @@ type apiMovie struct {
 	Title         string `json:"title"`
 	OriginalTitle string `json:"original_title"`
 	ReleaseDate   string `json:"release_date"`
+	Runtime       int    `json:"runtime"`
 	Overview      string `json:"overview"`
 	BackdropPath  string `json:"backdrop_path"`
 	PosterPath    string `json:"poster_path"`
@@ -154,6 +157,7 @@ func (m apiMovie) movie() Movie {
 		ID:            m.ID,
 		Title:         strings.TrimSpace(m.Title),
 		OriginalTitle: strings.TrimSpace(m.OriginalTitle),
+		Runtime:       m.Runtime,
 		Overview:      strings.TrimSpace(m.Overview),
 		BackdropPath:  m.BackdropPath,
 		PosterPath:    m.PosterPath,

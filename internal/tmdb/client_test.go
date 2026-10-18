@@ -116,14 +116,14 @@ func TestMovie(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Write([]byte(`{"id":149,"title":"Akira","original_title":"AKIRA","release_date":"1988-07-16","overview":"Neo-Tokyo.","backdrop_path":"/a.jpg","poster_path":"/p.jpg"}`))
+		w.Write([]byte(`{"id":149,"title":"Akira","original_title":"AKIRA","release_date":"1988-07-16","runtime":124,"overview":"Neo-Tokyo.","backdrop_path":"/a.jpg","poster_path":"/p.jpg"}`))
 	})
 	c := newClient(f, testToken, nil)
 	m, err := c.Movie(context.Background(), 149)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Title != "Akira" || m.OriginalTitle != "AKIRA" || m.Year != 1988 || m.BackdropPath != "/a.jpg" {
+	if m.Title != "Akira" || m.OriginalTitle != "AKIRA" || m.Year != 1988 || m.Runtime != 124 || m.BackdropPath != "/a.jpg" {
 		t.Errorf("movie = %+v", m)
 	}
 	if _, err := c.Movie(context.Background(), 1); !errors.Is(err, ErrNotFound) {

@@ -98,7 +98,10 @@ func (s *Service) EditItem(ctx context.Context, itemID int64, e ItemEdit) (store
 		return store.Item{}, err
 	}
 
-	p := store.UpdateItemParams{Title: e.Title, Year: e.Year}
+	p := store.UpdateItemParams{Title: e.Title}
+	if e.Year != nil {
+		p.Year = store.SetTo(*e.Year)
+	}
 	if e.Summary != nil {
 		owned := true
 		p.Summary, p.SummaryLocked = store.SetTo(*e.Summary), &owned

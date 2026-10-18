@@ -1,10 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -251,10 +253,12 @@ func (s *Store) RemoveShowFromCollection(ctx context.Context, collectionID, show
 }
 
 // ReorderCollection rewrites the shared sort order. Members must cover every
-// row exactly once: an item member covers its own row, and a show member
-// covers the show's row and the rows of its live episodes, which then sort
-// together (show row first, then episode order). Naming a show and one of
-// its live episodes is invalid.
+// row clients can see exactly once: an item member covers its own row, and a
+// show member covers the show's row and the rows of its live episodes, which
+// then sort together (show row first, then episode order). Naming a show and
+// one of its live episodes is invalid. Hidden rows (a trashed item, a show
+// with no live episodes) may be named; unnamed, each keeps its place after
+// the row it follows now.
 func (s *Store) ReorderCollection(ctx context.Context, collectionID int64, members []CollectionRef) error {
 	if _, err := s.GetCollection(ctx, collectionID); err != nil {
 		return err
@@ -284,17 +288,23 @@ func (s *Store) ReorderCollection(ctx context.Context, collectionID int64, membe
 }
 
 // collectionRow is one collection_items row; liveShow is the show of a live
-// episode row, 0 otherwise.
+// episode row, 0 otherwise. A hidden row is one the library never lists.
 type collectionRow struct {
 	CollectionRef
-	liveShow int64
+	liveShow  int64
+	sortOrder int64
+	hidden    bool
 }
 
 // collectionRows lists the rows in the order a show member lays them out.
 func (s *Store) collectionRows(ctx context.Context, collectionID int64) ([]collectionRow, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT COALESCE(ci.item_id, 0), COALESCE(ci.show_id, 0),
-		       CASE WHEN mi.deleted_at IS NULL THEN COALESCE(mi.show_id, 0) ELSE 0 END
+		       CASE WHEN mi.deleted_at IS NULL THEN COALESCE(mi.show_id, 0) ELSE 0 END,
+		       ci.sort_order,
+		       CASE WHEN ci.item_id IS NOT NULL THEN mi.deleted_at IS NOT NULL
+		            ELSE NOT EXISTS (SELECT 1 FROM media_items e WHERE e.show_id = ci.show_id AND e.deleted_at IS NULL)
+		       END
 		FROM collection_items ci
 		LEFT JOIN media_items mi ON mi.id = ci.item_id
 		WHERE ci.collection_id = ?
@@ -307,7 +317,7 @@ func (s *Store) collectionRows(ctx context.Context, collectionID int64) ([]colle
 	var out []collectionRow
 	for rows.Next() {
 		var r collectionRow
-		if err := rows.Scan(&r.ItemID, &r.ShowID, &r.liveShow); err != nil {
+		if err := rows.Scan(&r.ItemID, &r.ShowID, &r.liveShow, &r.sortOrder, &r.hidden); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -366,8 +376,35 @@ func orderRows(rows []collectionRow, members []CollectionRef) ([]CollectionRef, 
 			return nil, invalid("a show is not in the collection")
 		}
 	}
-	if len(order) != len(rows) {
-		return nil, invalid("a member is missing")
+	for _, r := range rows {
+		if !used[r.CollectionRef] && !r.hidden {
+			return nil, invalid("a member is missing")
+		}
 	}
-	return order, nil
+	return keepHiddenInPlace(rows, order, used), nil
+}
+
+// keepHiddenInPlace slots each unnamed row straight after the row it follows
+// now, so a trashed item comes back from the trash where it was.
+func keepHiddenInPlace(rows []collectionRow, order []CollectionRef, used map[CollectionRef]bool) []CollectionRef {
+	if len(order) == len(rows) {
+		return order
+	}
+	current := slices.Clone(rows)
+	slices.SortStableFunc(current, func(a, b collectionRow) int { return cmp.Compare(a.sortOrder, b.sortOrder) })
+	after := map[CollectionRef][]CollectionRef{}
+	var anchor CollectionRef
+	for _, r := range current {
+		if used[r.CollectionRef] {
+			anchor = r.CollectionRef
+			continue
+		}
+		after[anchor] = append(after[anchor], r.CollectionRef)
+	}
+	out := slices.Clone(after[CollectionRef{}])
+	for _, ref := range order {
+		out = append(out, ref)
+		out = append(out, after[ref]...)
+	}
+	return out
 }

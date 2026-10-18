@@ -466,7 +466,7 @@ func (s *Service) fileNonEpisode(ctx context.Context, item store.Item, g guess, 
 	return s.updateItem(ctx, item.ID, store.UpdateItemParams{
 		Type:         &g.typ,
 		Title:        &g.title,
-		Year:         g.year,
+		Year:         store.Nullable[int]{Set: true, Value: g.year},
 		ShowID:       store.SetNull[int64](),
 		Season:       store.SetNull[int](),
 		Episode:      store.SetNull[int](),
@@ -485,7 +485,7 @@ func (s *Service) fileEpisode(ctx context.Context, item store.Item, g guess, par
 	p := store.UpdateItemParams{
 		Type:       &g.typ,
 		Title:      &g.title,
-		Year:       g.year,
+		Year:       store.Nullable[int]{Set: true, Value: g.year},
 		Season:     store.SetTo(g.season),
 		Episode:    store.SetTo(g.episode),
 		EpisodeEnd: store.SetNull[int](),

@@ -907,3 +907,27 @@ func TestItemSummaryCarriesShowFields(t *testing.T) {
 		t.Fatalf("episode summary = %v", got)
 	}
 }
+
+func TestCollectionReorderSkipsTrashedMembers(t *testing.T) {
+	f := newLibraryFixture(t)
+	coll := "/api/collections/" + idStr(f.toWatch.ID)
+	for _, body := range []map[string]int64{{"item_id": f.zodiac.ID}, {"item_id": f.clip.ID}, {"show_id": f.below.ID}} {
+		if rec := f.do("POST", coll+"/items", body); rec.Code != http.StatusNoContent {
+			t.Fatalf("add %v = %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if err := f.st.MarkItemTrashed(f.ctx, f.zodiac.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.expectLibrary("collection_id="+idStr(f.toWatch.ID), 2, "clip", "show:Below")
+	if rec := f.do("PUT", coll+"/order", map[string]any{"entries": []map[string]int64{
+		{"show_id": f.below.ID}, {"item_id": f.clip.ID},
+	}}); rec.Code != http.StatusNoContent {
+		t.Fatalf("reorder of the visible members = %d %s", rec.Code, rec.Body.String())
+	}
+	f.expectLibrary("collection_id="+idStr(f.toWatch.ID), 2, "show:Below", "clip")
+	if err := f.st.MarkItemRestored(f.ctx, f.zodiac.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.expectLibrary("collection_id="+idStr(f.toWatch.ID), 3, "Zodiac", "show:Below", "clip")
+}

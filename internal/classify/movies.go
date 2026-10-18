@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JeremyVun/MediaServer/internal/library"
@@ -126,7 +128,12 @@ func (s *Service) askTMDB(ctx context.Context, item store.Item) (movieAnswer, er
 		if err != nil {
 			return answer, s.tmdbFailure(ctx, err)
 		}
-		m, ok := confidentMovie(results, item.Title, *item.Year)
+		m, ties, ok := confidentMovie(results, item.Title, *item.Year)
+		if len(ties) > 0 {
+			if m, ok, err = s.byRuntime(ctx, item.ID, ties); err != nil {
+				return answer, err
+			}
+		}
 		if !ok {
 			if len(results) > 0 {
 				s.log.Info("classify: weak TMDB result not attached", "item_id", item.ID, "title", item.Title,
@@ -157,24 +164,89 @@ func (s *Service) tmdbFailure(ctx context.Context, err error) error {
 	return fmt.Errorf("%w: %w", ErrTMDBUnreachable, err)
 }
 
-// confidentMovie: exactly one result whose title (or original title)
-// normalizes to the item's and whose release year is the item's.
-func confidentMovie(results []tmdb.Movie, title string, year int) (tmdb.Movie, bool) {
-	key := library.ShowKey(title)
-	var found []tmdb.Movie
+// confidentMovie applies design "Movie metadata: TMDB" and ruling B10 to
+// results whose title (or original title) matches the item's: exactly one
+// from the parsed year is confident; with none, exactly one from a year
+// either side is. Two or more from the parsed year come back as ties for
+// byRuntime.
+func confidentMovie(results []tmdb.Movie, title string, year int) (match tmdb.Movie, ties []tmdb.Movie, ok bool) {
+	key := movieKey(title)
+	var exact, near []tmdb.Movie
 	for _, r := range results {
-		if r.Year != year {
+		if movieKey(r.Title) != key && (r.OriginalTitle == "" || movieKey(r.OriginalTitle) != key) {
 			continue
 		}
-		if library.ShowKey(r.Title) == key || (r.OriginalTitle != "" && library.ShowKey(r.OriginalTitle) == key) {
-			found = append(found, r)
+		switch r.Year - year {
+		case 0:
+			exact = append(exact, r)
+		case -1, 1:
+			near = append(near, r)
+		}
+	}
+	switch {
+	case len(exact) == 1:
+		return exact[0], nil, true
+	case len(exact) > 1:
+		return tmdb.Movie{}, exact, false
+	case len(near) == 1:
+		return near[0], nil, true
+	}
+	return tmdb.Movie{}, nil, false
+}
+
+const (
+	maxRuntimeChecks = 3
+	runtimeSlack     = 0.05
+)
+
+// byRuntime breaks a tie between namesakes: of the first maxRuntimeChecks,
+// exactly one whose runtime is within runtimeSlack of the file's is
+// confident.
+func (s *Service) byRuntime(ctx context.Context, itemID int64, ties []tmdb.Movie) (tmdb.Movie, bool, error) {
+	_, durationS, err := s.fileOf(ctx, itemID)
+	if err != nil || durationS <= 0 {
+		return tmdb.Movie{}, false, err
+	}
+	var found []tmdb.Movie
+	for _, t := range ties[:min(len(ties), maxRuntimeChecks)] {
+		m, err := s.tmdb.Movie(ctx, t.ID)
+		if errors.Is(err, tmdb.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return tmdb.Movie{}, false, s.tmdbFailure(ctx, err)
+		}
+		if m.Runtime > 0 && math.Abs(float64(m.Runtime)*60-durationS) <= runtimeSlack*durationS {
+			found = append(found, m)
 		}
 	}
 	if len(found) != 1 {
-		return tmdb.Movie{}, false
+		return tmdb.Movie{}, false, nil
 	}
-	return found[0], true
+	return found[0], true, nil
 }
+
+// movieKey is library.ShowKey with Latin diacritics folded, so "Amélie"
+// matches "Amelie".
+func movieKey(title string) string {
+	return library.ShowKey(latinFold.Replace(strings.ToLower(title)))
+}
+
+var latinFold = func() *strings.Replacer {
+	groups := map[string]string{
+		"a": "àáâãäåāăą", "ae": "æ", "c": "çćĉċč", "d": "ďđð", "e": "èéêëēĕėęě",
+		"g": "ĝğġģ", "h": "ĥħ", "i": "ìíîïĩīĭįı", "j": "ĵ", "k": "ķ", "l": "ĺļľŀł",
+		"n": "ñńņňŉ", "o": "òóôõöøōŏő", "oe": "œ", "r": "ŕŗř", "s": "śŝşšș", "ss": "ß",
+		"t": "ţťŧț", "th": "þ", "u": "ùúûüũūŭůűų", "w": "ŵ", "y": "ýÿŷ", "z": "źżž",
+	}
+	var pairs []string
+	for plain, accented := range groups {
+		for _, r := range accented {
+			pairs = append(pairs, string(r), plain)
+		}
+	}
+	return strings.NewReplacer(pairs...)
+}()
 
 func (s *Service) downloadMovieArt(ctx context.Context, url string) (string, error) {
 	dir := filepath.Join(s.artDir, "items")
@@ -226,8 +298,12 @@ func (s *Service) applyMovie(ctx context.Context, a movieAnswer) (stale bool, er
 		s.log.Info("classify: movie not matched on TMDB", "item_id", item.ID, "title", item.Title)
 	case a.movie != nil:
 		if item.TMDBID == nil {
-			p.TMDBID = store.SetTo(int64(a.movie.ID))
+			clear := false
+			p.TMDBID, p.NeedsCheck = store.SetTo(int64(a.movie.ID)), &clear
 			s.log.Info("classify: movie matched on TMDB", "item_id", item.ID, "title", a.movie.Title, "tmdb_id", a.movie.ID)
+		}
+		if title := a.movie.Title; title != "" && title != item.Title && !item.Locked {
+			p.Title = &title
 		}
 		if overview := a.movie.Overview; overview != "" && fillsSummary(item, a.asked.TMDBID != nil) {
 			p.Summary = store.SetTo(overview)

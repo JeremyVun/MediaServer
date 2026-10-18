@@ -180,7 +180,7 @@ func (s *Store) ListItemsByShow(ctx context.Context, showID int64) ([]Item, erro
 type UpdateItemParams struct {
 	Type          *string
 	Title         *string
-	Year          *int
+	Year          Nullable[int]
 	Summary       Nullable[string]
 	ShowID        Nullable[int64]
 	Season        Nullable[int]
@@ -212,8 +212,8 @@ func (s *Store) UpdateItem(ctx context.Context, id int64, p UpdateItemParams) (I
 	if p.Title != nil {
 		set("title", *p.Title)
 	}
-	if p.Year != nil {
-		set("year", *p.Year)
+	if p.Year.Set {
+		set("year", nullableArg(p.Year))
 	}
 	if p.Summary.Set {
 		set("summary", nullableArg(p.Summary))
