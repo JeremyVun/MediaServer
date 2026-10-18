@@ -133,6 +133,8 @@ function ep(id: number, season: number, episode: number, overrides: Partial<Libr
     episode,
     episode_end: null,
     needs_check: false,
+    tmdb_id: null,
+    art_url: null,
     ...overrides,
   }
 }

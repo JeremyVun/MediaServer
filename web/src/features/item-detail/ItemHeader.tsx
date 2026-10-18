@@ -19,11 +19,14 @@ export function ItemHeader({
   editing,
   onEdit,
   onDone,
+  onChangeMatch,
 }: {
   item: ItemDetail
   editing: boolean
   onEdit: () => void
   onDone: () => void
+  /** Set for a movie when the server has TMDB: opens the TMDB match dialog. */
+  onChangeMatch?: () => void
 }) {
   const [moveOpen, setMoveOpen] = useState(false)
   if (editing) return <EditForm key={item.updated_at} item={item} onDone={onDone} />
@@ -31,7 +34,11 @@ export function ItemHeader({
     <>
       <header className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <Kicker item={item} onMove={() => setMoveOpen(true)} />
+          <Kicker
+            item={item}
+            onMove={() => setMoveOpen(true)}
+            onChangeMatch={item.needs_check ? undefined : onChangeMatch}
+          />
           <h1 className="text-2xl font-semibold">{item.title}</h1>
           <ClampedText text={item.summary} className="mt-4" />
         </div>
@@ -39,15 +46,30 @@ export function ItemHeader({
           <Edit3 aria-hidden className="size-5" strokeWidth={1.75} />
         </IconButton>
       </header>
-      {item.needs_check && <ItemCheck item={item} onChange={item.type === 'episode' ? () => setMoveOpen(true) : onEdit} />}
+      {item.needs_check && (
+        <ItemCheck
+          item={item}
+          tmdb={onChangeMatch != null}
+          onChange={item.type === 'episode' ? () => setMoveOpen(true) : (onChangeMatch ?? onEdit)}
+        />
+      )}
       <MoveToShowDialog item={item} open={moveOpen} onClose={() => setMoveOpen(false)} />
     </>
   )
 }
 
-function Kicker({ item, onMove }: { item: ItemDetail; onMove: () => void }) {
+function Kicker({ item, onMove, onChangeMatch }: { item: ItemDetail; onMove: () => void; onChangeMatch?: () => void }) {
   if (item.type !== 'episode') {
-    return <p className="mb-1 text-sm text-secondary">{[TYPE_LABEL[item.type], item.year].filter(Boolean).join(' · ')}</p>
+    return (
+      <p className="mb-1 flex flex-wrap items-center gap-x-1 text-sm text-secondary">
+        <span>{[TYPE_LABEL[item.type], item.year].filter(Boolean).join(' · ')}</span>
+        {onChangeMatch && (
+          <button type="button" onClick={onChangeMatch} className={QUIET_ACTION}>
+            Change match
+          </button>
+        )}
+      </p>
+    )
   }
   const place = placeLabel(item)
   return (
@@ -75,7 +97,8 @@ function placeLabel(item: ItemDetail): string {
   return `Season ${item.season} · ${episode}`
 }
 
-function ItemCheck({ item, onChange }: { item: ItemDetail; onChange: () => void }) {
+/** `tmdb`: the server has TMDB, so an unmatched movie says it isn't on TMDB. */
+export function ItemCheck({ item, tmdb, onChange }: { item: ItemDetail; tmdb: boolean; onChange: () => void }) {
   const patch = usePatchItem(item.id)
   const { toast } = useToast()
   const confirm = () =>
@@ -96,13 +119,15 @@ function ItemCheck({ item, onChange }: { item: ItemDetail; onChange: () => void 
           : ''}
         .
       </>
+    ) : tmdb && item.type === 'movie' && item.tmdb_id == null ? (
+      'Not matched on TMDB, so the title comes from the file.'
     ) : (
       `Listed as a ${item.type}, based on its file name.`
     )
   return <CheckStrip message={message} confirming={patch.isPending} onConfirm={confirm} onChange={onChange} />
 }
 
-function EditForm({ item, onDone }: { item: ItemDetail; onDone: () => void }) {
+export function EditForm({ item, onDone }: { item: ItemDetail; onDone: () => void }) {
   const patch = usePatchItem(item.id)
   const { toast } = useToast()
   const [title, setTitle] = useState(item.title)
@@ -134,7 +159,8 @@ function EditForm({ item, onDone }: { item: ItemDetail; onDone: () => void }) {
     const trimmedTitle = title.trim()
     if (trimmedTitle !== item.title) out.title = trimmedTitle
     if (year.trim() && Number(year) !== item.year) out.year = Number(year)
-    if (summary.trim() !== (item.summary ?? '')) out.summary = summary.trim()
+    // Sending an unchanged summary would mark it the owner's and stop TMDB updating it.
+    if (summary.trim() !== (item.summary ?? '').trim()) out.summary = summary.trim()
     if (type !== item.type) out.type = type
     if (type === 'episode') {
       if (!show) return null

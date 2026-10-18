@@ -1,4 +1,5 @@
 import { useState, type RefObject } from 'react'
+import { ArrowLeft } from 'lucide-react'
 import './splash.css'
 
 /** Wider than this, art crops from the left: a centre crop cut the logo
@@ -49,5 +50,36 @@ export function SplashSpacer({ src }: { src: string | null }) {
       <img src={src} alt="" aria-hidden className="invisible -mb-6 block h-auto w-full min-[640px]:hidden" />
       <div className="hidden h-[52vh] min-[640px]:block" />
     </>
+  )
+}
+
+/** Back to the library: the house text link, or a dark chip over art. */
+export function BackLink({ onBack, overArt }: { onBack: () => void; overArt: boolean }) {
+  const icon = <ArrowLeft aria-hidden className="size-4" strokeWidth={1.75} />
+  // White on black/55 holds 4.9:1 even over a white sky; bare white text
+  // measured 1.39:1 over bright art.
+  if (overArt) {
+    return (
+      <button
+        type="button"
+        onClick={onBack}
+        className="absolute top-0 -left-1 z-10 inline-flex h-11 cursor-pointer items-center rounded-full"
+      >
+        <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-black/55 pr-3 pl-2 text-sm text-white">
+          {icon}
+          Library
+        </span>
+      </button>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onBack}
+      className="text-secondary hover:text-primary absolute top-0 left-0 z-10 inline-flex h-11 cursor-pointer items-center gap-2 rounded-sm text-sm"
+    >
+      {icon}
+      Library
+    </button>
   )
 }

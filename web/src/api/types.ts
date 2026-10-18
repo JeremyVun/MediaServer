@@ -31,6 +31,8 @@ export interface SemanticClassificationSettings {
 export interface SettingsResponse {
   hls_cache: HLSCacheSettings
   semantic_classification: SemanticClassificationSettings
+  /** Whether the server has a TMDB token; the token itself never leaves it. */
+  tmdb: { configured: boolean }
 }
 
 export interface RootInfo {
@@ -74,7 +76,14 @@ export interface EpisodeFields {
   needs_check: boolean
 }
 
-export interface ItemSummary extends EpisodeFields {
+/** TMDB movie data; null unless the server has a token and matched a movie. */
+export interface MovieFields {
+  tmdb_id: number | null
+  /** The cached TMDB backdrop, null until cached. */
+  art_url: string | null
+}
+
+export interface ItemSummary extends EpisodeFields, MovieFields {
   id: number
   type: ItemType
   title: string
@@ -182,6 +191,22 @@ export interface MatchSearchResponse {
   results: MatchCandidate[]
 }
 
+export interface MovieMatchCandidate {
+  tmdb_id: number
+  title: string
+  year: number | null
+  poster_url: string | null
+}
+
+export interface MovieMatchSearchResponse {
+  results: MovieMatchCandidate[]
+}
+
+/** `tmdb_id: null` is "Not on TMDB". */
+export interface MovieMatchRequest {
+  tmdb_id: number | null
+}
+
 export interface ShowTrashResponse {
   item_ids: number[]
 }
@@ -219,7 +244,7 @@ export interface MediaFile {
   streams: MediaStream[]
 }
 
-export interface ItemDetail extends EpisodeFields {
+export interface ItemDetail extends EpisodeFields, MovieFields {
   id: number
   type: ItemType
   title: string

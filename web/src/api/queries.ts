@@ -7,6 +7,8 @@ import type {
   Health,
   LibraryList,
   MatchSearchResponse,
+  MovieMatchRequest,
+  MovieMatchSearchResponse,
   ShowDetail,
   ShowMatchRequest,
   ShowPatch,
@@ -375,6 +377,41 @@ export function usePatchItem(id: number) {
     mutationFn: (patch: ItemPatch) => jsonApi<ItemDetail>(`/api/items/${id}`, 'PATCH', patch),
     onSuccess: (item) => {
       queryClient.setQueryData(['item', id], item)
+      void queryClient.invalidateQueries({ queryKey: ['items'] })
+      invalidateShowCaches(queryClient)
+    },
+  })
+}
+
+/** TMDB candidates for a movie's Change dialog. A year narrows the search;
+    when it finds nothing the title alone is tried, so a release year that
+    disagrees with the file's still offers its candidate. */
+export function useMovieMatchSearch(itemID: number, q: string, year: number | null, enabled = true) {
+  const trimmed = q.trim()
+  return useQuery({
+    queryKey: ['movie-match-search', itemID, trimmed, year],
+    queryFn: async () => {
+      const search = (withYear: boolean) => {
+        const params = new URLSearchParams({ q: trimmed })
+        if (withYear && year) params.set('year', String(year))
+        return api<MovieMatchSearchResponse>(`/api/items/${itemID}/match-search?${params}`)
+      }
+      const first = await search(true)
+      return first.results.length === 0 && year ? search(false) : first
+    },
+    enabled: enabled && trimmed.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+/** The summary and art_url of a new match arrive later, via item.updated. */
+export function useMatchMovie(itemID: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (request: MovieMatchRequest) =>
+      jsonApi<ItemDetail>(`/api/items/${itemID}/match`, 'POST', request),
+    onSuccess: (item) => {
+      queryClient.setQueryData(['item', itemID], item)
       void queryClient.invalidateQueries({ queryKey: ['items'] })
       invalidateShowCaches(queryClient)
     },

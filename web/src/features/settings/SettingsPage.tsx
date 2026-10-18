@@ -702,6 +702,7 @@ function SystemPreview() {
 
 function AboutSection() {
   const health = useHealth()
+  const settings = useSettings()
   return (
     <section aria-labelledby="about-heading" className="space-y-3">
       <h2 id="about-heading" className="text-lg font-semibold">
@@ -712,6 +713,9 @@ function AboutSection() {
         <AboutRow label="Uptime" value={formatClock(health.data?.uptime_s)} />
         <AboutRow label="Queue depth" value={String(health.data?.queue_depth ?? 0)} />
       </dl>
+      {settings.data?.tmdb?.configured && (
+        <p className="text-tertiary text-xs">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      )}
     </section>
   )
 }

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Ban, Tv } from 'lucide-react'
+import { Ban, Tv, type LucideIcon } from 'lucide-react'
 
 /** One choice in a picker dialog: a poster, a name and a meta line, with a
     radio mark. The selected row gets a surface and a strong border. */
@@ -47,12 +47,12 @@ export function OptionRow({
 
 const THUMB = 'bg-inset border-line aspect-[2/3] w-10 shrink-0 overflow-hidden rounded-sm border'
 
-export function PosterThumb({ src }: { src: string | null }) {
+export function PosterThumb({ src, Glyph = Tv }: { src: string | null; Glyph?: LucideIcon }) {
   const [broken, setBroken] = useState(false)
   if (!src || broken) {
     return (
       <span className={`${THUMB} text-tertiary flex items-center justify-center`}>
-        <Tv aria-hidden className="size-4" strokeWidth={1.75} />
+        <Glyph aria-hidden className="size-4" strokeWidth={1.75} />
       </span>
     )
   }

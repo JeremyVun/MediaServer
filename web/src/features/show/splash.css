@@ -1,6 +1,7 @@
-/* The show page's splash, ported from the round 3 exemplar
-   (docs/backlog/shows/comps/r3/workshop/synth.css). useSplashScroll sets
-   --dim (0..1, eased), --drift (px) and --top (1..0) on [data-show-page]. */
+/* The splash header (the show page, and movie pages with TMDB art), ported
+   from the round 3 exemplar (docs/backlog/shows/comps/r3/workshop/synth.css).
+   useSplashScroll sets --dim (0..1, eased), --drift (px) and --top (1..0)
+   on [data-show-page]. */
 [data-show-page] {
   --dim: 0;
   --drift: 0px;

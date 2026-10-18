@@ -31,6 +31,8 @@ export function itemEntry(id: number, overrides: Partial<ItemSummary> = {}): Ite
     episode: null,
     episode_end: null,
     needs_check: false,
+    tmdb_id: null,
+    art_url: null,
     ...overrides,
   }
 }

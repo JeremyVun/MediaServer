@@ -1,6 +1,6 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
-import { ArrowLeft, Clapperboard, Layers, Play, Trash2 } from 'lucide-react'
+import { ArrowLeft, Clapperboard, Ellipsis, Layers, Link2, Pencil, Play, RotateCcw, Trash2 } from 'lucide-react'
 import {
   useCollections,
   useDeleteItem,
@@ -8,18 +8,25 @@ import {
   useItem,
   useRemoveItemFromCollection,
   useRestoreItem,
+  useSettings,
 } from '../../api/queries.ts'
 import type { Collection, ItemDetail, MediaFile } from '../../api/types.ts'
 import { formatBytes, formatClock, formatDuration } from '../../lib/format.ts'
 import { makeRunOrToast } from '../../lib/mutationFeedback.ts'
 import { withSearchParam } from '../../lib/searchParams.ts'
-import { Button, Dialog, OfflineLabel, Skeleton, useToast } from '../../ui/index.ts'
-import { ItemHeader } from './ItemHeader.tsx'
+import { Button, Dialog, Menu, MenuItem, MenuSeparator, OfflineLabel, Skeleton, useToast } from '../../ui/index.ts'
+import { useThumbRetry } from '../library/useThumbRetry.ts'
+import { BackLink, ClampedText, SplashLayer, SplashSpacer, useSplashScroll } from '../show/index.ts'
+import { EditForm, ItemCheck, ItemHeader } from './ItemHeader.tsx'
+import { MovieMatchDialog } from './MovieMatchDialog.tsx'
+
+const TMDB_NOTICE = 'This product uses the TMDB API but is not endorsed or certified by TMDB.'
 
 export function ItemDetailPage() {
   const id = useNumericParam()
   const item = useItem(id)
   const health = useHealth()
+  const settings = useSettings()
   const collections = useCollections()
   const deleteItem = useDeleteItem()
   const restoreItem = useRestoreItem()
@@ -39,6 +46,8 @@ export function ItemDetailPage() {
   const [userSelectedFileID, setUserSelectedFileID] = useState<number | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [matchOpen, setMatchOpen] = useState(false)
+  const art = useThumbRetry(item.data?.art_url ?? null)
 
   if (id == null) return <DetailShell title="Item not found" backTo={backTo} onBack={goBack} />
   if (item.isPending) return <DetailSkeleton backTo={backTo} onBack={goBack} />
@@ -74,69 +83,29 @@ export function ItemDetailPage() {
     })
   }
 
-  return (
-    <DetailShell title={item.data.title} backTo={backTo} onBack={goBack}>
-      <div className="grid gap-8 lg:grid-cols-[minmax(260px,360px)_1fr]">
-        <Poster item={item.data} />
-        <section className="min-w-0">
-          <ItemHeader
-            item={item.data}
-            editing={editing}
-            onEdit={() => setEditing(true)}
-            onDone={() => setEditing(false)}
+  const onChangeMatch =
+    settings.data?.tmdb?.configured && item.data.type === 'movie' ? () => setMatchOpen(true) : undefined
+  const fromHere = { state: { from: `/items/${item.data.id}` } }
+  const files = (
+    <section className="mt-8">
+      <h2 className="mb-3 text-lg font-semibold">Files</h2>
+      <div className="space-y-3">
+        {item.data.files.map((file) => (
+          <FileRow
+            key={file.id}
+            file={file}
+            selected={file.id === selectedFile?.id}
+            onSelect={() => setUserSelectedFileID(file.id)}
           />
-
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <Button
-              variant="primary"
-              touch
-              disabled={!selectedAvailable}
-              onClick={() => navigate(playPath, { state: { from: `/items/${item.data.id}` } })}
-            >
-              <Play aria-hidden className="size-5" strokeWidth={1.75} />
-              Play
-            </Button>
-            {canResume && (
-              <Button
-                variant="secondary"
-                touch
-                disabled={!selectedAvailable}
-                onClick={() => navigate(watchPath, { state: { from: `/items/${item.data.id}` } })}
-              >
-                Resume from {formatClock(item.data.progress?.position_s)}
-              </Button>
-            )}
-            {selectedFile && !selectedAvailable && <OfflineLabel className="text-primary text-sm" />}
-          </div>
-
-          <Facts file={selectedFile} rootName={root?.name} />
-
-          <CollectionChips item={item.data} collections={collections.data ?? []} />
-
-          <section className="mt-8">
-            <h2 className="mb-3 text-lg font-semibold">Files</h2>
-            <div className="space-y-3">
-              {item.data.files.map((file) => (
-                <FileRow
-                  key={file.id}
-                  file={file}
-                  selected={file.id === selectedFile?.id}
-                  onSelect={() => setUserSelectedFileID(file.id)}
-                />
-              ))}
-            </div>
-          </section>
-
-          <section className="border-line mt-8 border-t pt-6">
-            <h2 className="mb-3 text-lg font-semibold">Danger zone</h2>
-            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
-              <Trash2 aria-hidden className="size-4" strokeWidth={1.75} />
-              Move to trash
-            </Button>
-          </section>
-        </section>
+        ))}
       </div>
-
+    </section>
+  )
+  const soleFile = item.data.files.length === 1 ? item.data.files[0] : null
+  const notice = item.data.tmdb_id != null && <p className="text-tertiary mt-10 text-xs">{TMDB_NOTICE}</p>
+  const dialogs = (
+    <>
+      {onChangeMatch && <MovieMatchDialog item={item.data} open={matchOpen} onClose={() => setMatchOpen(false)} />}
       <Dialog
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
@@ -155,7 +124,186 @@ export function ItemDetailPage() {
       >
         <p className="text-secondary">{item.data.title} will move to the root's trash folder.</p>
       </Dialog>
+    </>
+  )
+
+  if (item.data.art_url && !art.broken) {
+    const play = () => navigate(canResume ? watchPath : playPath, fromHere)
+    return (
+      <MovieSplash art={item.data.art_url} onArtError={art.markBroken} onBack={goBack}>
+        <header data-hero>
+          {editing ? (
+            <EditForm key={item.data.updated_at} item={item.data} onDone={() => setEditing(false)} />
+          ) : (
+            <>
+              <h1 className="text-2xl font-semibold tracking-tight">{item.data.title}</h1>
+              <MovieMeta year={item.data.year} durationS={selectedFile?.duration_s} />
+              <ClampedText text={item.data.summary} className="mt-3" />
+              {item.data.needs_check && (
+                <ItemCheck item={item.data} tmdb={onChangeMatch != null} onChange={onChangeMatch ?? (() => setEditing(true))} />
+              )}
+              <div className="mt-5 flex items-center gap-3">
+                <Button
+                  variant="primary"
+                  touch
+                  disabled={!selectedAvailable}
+                  className={selectedAvailable ? 'max-[639px]:flex-1' : ''}
+                  onClick={play}
+                >
+                  <Play aria-hidden className="size-5" strokeWidth={1.75} />
+                  {canResume ? `Resume from ${formatClock(item.data.progress?.position_s)}` : 'Play'}
+                </Button>
+                {selectedFile && !selectedAvailable && (
+                  <>
+                    <OfflineLabel className="text-primary text-sm" />
+                    <span className="grow" />
+                  </>
+                )}
+                <MovieMenu
+                  onEdit={() => setEditing(true)}
+                  onChangeMatch={onChangeMatch}
+                  onPlayFromStart={canResume && selectedAvailable ? () => navigate(playPath, fromHere) : undefined}
+                  onTrash={() => setDeleteOpen(true)}
+                />
+              </div>
+            </>
+          )}
+        </header>
+        <CollectionChips item={item.data} collections={collections.data ?? []} className="mt-10" />
+        {soleFile ? (
+          <section className="mt-8">
+            <h2 className="mb-3 text-lg font-semibold">Files</h2>
+            <SoleFile file={soleFile} />
+          </section>
+        ) : (
+          files
+        )}
+        {notice}
+        {dialogs}
+      </MovieSplash>
+    )
+  }
+
+  return (
+    <DetailShell title={item.data.title} backTo={backTo} onBack={goBack}>
+      <div className="grid gap-8 lg:grid-cols-[minmax(260px,360px)_1fr]">
+        <Poster item={item.data} />
+        <section className="min-w-0">
+          <ItemHeader
+            item={item.data}
+            editing={editing}
+            onEdit={() => setEditing(true)}
+            onDone={() => setEditing(false)}
+            onChangeMatch={onChangeMatch}
+          />
+
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <Button variant="primary" touch disabled={!selectedAvailable} onClick={() => navigate(playPath, fromHere)}>
+              <Play aria-hidden className="size-5" strokeWidth={1.75} />
+              Play
+            </Button>
+            {canResume && (
+              <Button variant="secondary" touch disabled={!selectedAvailable} onClick={() => navigate(watchPath, fromHere)}>
+                Resume from {formatClock(item.data.progress?.position_s)}
+              </Button>
+            )}
+            {selectedFile && !selectedAvailable && <OfflineLabel className="text-primary text-sm" />}
+          </div>
+
+          <Facts file={selectedFile} rootName={root?.name} />
+
+          <CollectionChips item={item.data} collections={collections.data ?? []} />
+
+          {files}
+
+          <section className="border-line mt-8 border-t pt-6">
+            <h2 className="mb-3 text-lg font-semibold">Danger zone</h2>
+            <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+              <Trash2 aria-hidden className="size-4" strokeWidth={1.75} />
+              Move to trash
+            </Button>
+          </section>
+          {notice}
+        </section>
+      </div>
+      {dialogs}
     </DetailShell>
+  )
+}
+
+/** A movie with a cached TMDB backdrop: the show page's splash header. */
+function MovieSplash({
+  art,
+  onArtError,
+  onBack,
+  children,
+}: {
+  art: string
+  onArtError: () => void
+  onBack: () => void
+  children: ReactNode
+}) {
+  const pageRef = useRef<HTMLElement>(null)
+  const bandRef = useRef<HTMLDivElement>(null)
+  const refresh = useSplashScroll(pageRef, bandRef)
+  return (
+    <main ref={pageRef} data-show-page data-art="" className="relative">
+      <SplashLayer src={art} bandRef={bandRef} onLoad={refresh} onError={onArtError} />
+      <div className="relative mx-auto max-w-6xl px-4 min-[640px]:px-8">
+        <div className="relative pt-3 min-[640px]:pt-5">
+          <BackLink onBack={onBack} overArt />
+        </div>
+      </div>
+      <SplashSpacer src={art} />
+      <div className="relative mx-auto max-w-6xl px-4 pb-20 min-[640px]:px-8">
+        <div className="min-[640px]:max-w-3xl">{children}</div>
+      </div>
+    </main>
+  )
+}
+
+function MovieMeta({ year, durationS }: { year: number | null; durationS: number | null | undefined }) {
+  const meta = [year ? String(year) : '', durationS ? formatDuration(durationS) : ''].filter(Boolean).join(' · ')
+  if (!meta) return null
+  return <p className="text-secondary mt-1 text-sm">{meta}</p>
+}
+
+function MovieMenu({
+  onEdit,
+  onChangeMatch,
+  onPlayFromStart,
+  onTrash,
+}: {
+  onEdit: () => void
+  onChangeMatch?: () => void
+  onPlayFromStart?: () => void
+  onTrash: () => void
+}) {
+  const iconClass = 'size-4'
+  return (
+    <Menu
+      aria-label="More"
+      trigger={<Ellipsis aria-hidden className="size-5" strokeWidth={1.75} />}
+      triggerClassName="border-line text-primary hover:bg-accent-subtle inline-flex size-11 shrink-0 cursor-pointer items-center justify-center rounded-md border"
+    >
+      {onPlayFromStart && (
+        <MenuItem icon={<RotateCcw className={iconClass} strokeWidth={1.75} />} onSelect={onPlayFromStart}>
+          Play from start
+        </MenuItem>
+      )}
+      <MenuItem icon={<Pencil className={iconClass} strokeWidth={1.75} />} onSelect={onEdit}>
+        Edit details
+      </MenuItem>
+      {onChangeMatch && (
+        <MenuItem icon={<Link2 className={iconClass} strokeWidth={1.75} />} onSelect={onChangeMatch}>
+          Change match
+        </MenuItem>
+      )}
+      <MenuSeparator />
+      <MenuItem danger icon={<Trash2 className={iconClass} strokeWidth={1.75} />} onSelect={onTrash}>
+        Move to trash
+      </MenuItem>
+    </Menu>
   )
 }
 
@@ -259,14 +407,22 @@ function Facts({ file, rootName }: { file: MediaFile | null; rootName?: string }
   )
 }
 
-function CollectionChips({ item, collections }: { item: ItemDetail; collections: Collection[] }) {
+function CollectionChips({
+  item,
+  collections,
+  className = 'mt-8',
+}: {
+  item: ItemDetail
+  collections: Collection[]
+  className?: string
+}) {
   const remove = useRemoveItemFromCollection()
   const { toast } = useToast()
   const runOrToast = makeRunOrToast(toast)
   const memberCollections = collections.filter((collection) => item.collection_ids.includes(collection.id))
 
   return (
-    <section className="mt-8">
+    <section className={className}>
       <div className="mb-3 flex items-center gap-2">
         <Layers aria-hidden className="text-secondary size-4" strokeWidth={1.75} />
         <h2 className="text-lg font-semibold">Collections</h2>
@@ -322,6 +478,18 @@ function FileRow({
       </span>
       <span className="shrink-0 text-sm text-secondary">{selected ? 'Selected' : 'Use'}</span>
     </button>
+  )
+}
+
+/** With one file there is nothing to pick: the row only names it. */
+function SoleFile({ file }: { file: MediaFile }) {
+  return (
+    <div data-file-row className="bg-surface border-line rounded-lg border p-4">
+      <span className="block truncate text-base font-medium">{file.rel_path}</span>
+      <span className="block truncate text-sm text-secondary">
+        {[file.duration_s ? formatDuration(file.duration_s) : '', file.status].filter(Boolean).join(' · ')}
+      </span>
+    </div>
   )
 }
 

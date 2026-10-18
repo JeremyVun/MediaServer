@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
-import { ArrowLeft, Ellipsis, Layers, Link2, Merge, Pencil, Play, Trash2 } from 'lucide-react'
+import { Ellipsis, Layers, Link2, Merge, Pencil, Play, Trash2 } from 'lucide-react'
 import { ApiError } from '../../api/client.ts'
 import {
   useAddShowToCollection,
@@ -27,7 +27,7 @@ import { MergeShowDialog } from './MergeShowDialog.tsx'
 import { RenameShowDialog } from './RenameShowDialog.tsx'
 import { SeasonChips } from './SeasonChips.tsx'
 import { initialSeason, seasonLabel, seasonOptions } from './seasons.ts'
-import { SplashLayer, SplashSpacer } from './Splash.tsx'
+import { BackLink, SplashLayer, SplashSpacer } from './Splash.tsx'
 import { useSplashScroll } from './useSplashScroll.ts'
 
 type DialogName = 'rename' | 'change' | 'merge' | 'trash'
@@ -107,7 +107,7 @@ function ShowView({ show, back }: { show: ShowDetail; back: Back }) {
       {artSrc && <SplashLayer src={artSrc} bandRef={bandRef} onLoad={refresh} onError={art.markBroken} />}
       <div className="relative mx-auto max-w-6xl px-4 min-[640px]:px-8">
         <div className="relative pt-3 min-[640px]:pt-5">
-          <BackLink back={back} overArt={artSrc != null} />
+          <BackLink onBack={back.onBack} overArt={artSrc != null} />
         </div>
       </div>
       <SplashSpacer src={artSrc} />
@@ -167,36 +167,6 @@ function ShowView({ show, back }: { show: ShowDetail; back: Back }) {
       <MergeShowDialog show={show} open={dialog === 'merge'} onClose={close} onMerged={onMerged} />
       <TrashShowDialog show={show} open={dialog === 'trash'} onClose={close} onTrashed={back.onBack} />
     </main>
-  )
-}
-
-function BackLink({ back, overArt }: { back: Back; overArt: boolean }) {
-  const icon = <ArrowLeft aria-hidden className="size-4" strokeWidth={1.75} />
-  // White on black/55 holds 4.9:1 even over a white sky; bare white text
-  // measured 1.39:1 over bright art.
-  if (overArt) {
-    return (
-      <button
-        type="button"
-        onClick={back.onBack}
-        className="absolute top-0 -left-1 z-10 inline-flex h-11 cursor-pointer items-center rounded-full"
-      >
-        <span className="inline-flex h-8 items-center gap-1.5 rounded-full bg-black/55 pr-3 pl-2 text-sm text-white">
-          {icon}
-          Library
-        </span>
-      </button>
-    )
-  }
-  return (
-    <button
-      type="button"
-      onClick={back.onBack}
-      className="text-secondary hover:text-primary absolute top-0 left-0 z-10 inline-flex h-11 cursor-pointer items-center gap-2 rounded-sm text-sm"
-    >
-      {icon}
-      Library
-    </button>
   )
 }
 
@@ -394,7 +364,7 @@ function Shell({ back, message, children }: { back: Back; message: string; child
   return (
     <main className="mx-auto max-w-6xl px-4 pt-3 min-[640px]:px-8 min-[640px]:pt-5">
       <div className="relative h-11">
-        <BackLink back={back} overArt={false} />
+        <BackLink onBack={back.onBack} overArt={false} />
       </div>
       <div className="flex flex-col items-center py-24 text-center">
         <p className="text-lg font-semibold">{message}</p>
@@ -408,7 +378,7 @@ function ShowSkeleton({ back }: { back: Back }) {
   return (
     <main aria-busy="true" className="mx-auto max-w-6xl px-4 pt-3 pb-20 min-[640px]:px-8 min-[640px]:pt-5">
       <div className="relative h-11">
-        <BackLink back={back} overArt={false} />
+        <BackLink onBack={back.onBack} overArt={false} />
       </div>
       <div className="mt-16 space-y-3 min-[640px]:max-w-3xl">
         <Skeleton className="h-10 w-2/3" />

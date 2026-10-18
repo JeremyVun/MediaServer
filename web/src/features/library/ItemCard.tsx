@@ -9,8 +9,8 @@ import { CardMeta, CardOverlay, ImagePlaceholder, ProgressEdge } from './cardPar
 import { SelectableCard, type CardSelection } from './SelectableCard.tsx'
 import { useThumbRetry } from './useThumbRetry.ts'
 
-/** A movie, video or not-yet-filed episode: the whole 16:9 image plus
-    progress, no spine. The image plays; offline items open their page. */
+/** A movie, video or not-yet-filed episode: the whole 16:9 image (a
+    movie's TMDB backdrop, else its frame) plus progress, no spine. The image plays; offline items open their page. */
 export function ItemCard({
   item,
   cardStyle,
@@ -84,11 +84,18 @@ function ItemThumb({
   progress: number
   overlay: boolean
 }) {
-  const { broken, markBroken } = useThumbRetry(item.thumb_url)
+  const art = useThumbRetry(item.art_url)
+  const thumb = useThumbRetry(item.thumb_url)
+  const image =
+    item.art_url && !art.broken
+      ? { src: item.art_url, onError: art.markBroken }
+      : !thumb.broken
+        ? { src: item.thumb_url, onError: thumb.markBroken }
+        : null
   return (
     <div className="bg-inset relative aspect-video overflow-hidden">
-      {!broken ? (
-        <img src={item.thumb_url} alt="" loading="lazy" onError={markBroken} className="h-full w-full object-cover" />
+      {image ? (
+        <img key={image.src} src={image.src} alt="" loading="lazy" onError={image.onError} className="h-full w-full object-cover" />
       ) : (
         <ImagePlaceholder>
           <Clapperboard aria-hidden className="size-10" strokeWidth={1.5} />
