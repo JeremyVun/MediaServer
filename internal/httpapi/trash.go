@@ -298,7 +298,7 @@ func (s *Server) purgeItem(w http.ResponseWriter, ctx context.Context, item stor
 			return false
 		}
 	}
-	if err := s.store.HardDeleteItem(ctx, item.ID); err != nil {
+	if _, err := s.store.HardDeleteItem(ctx, item.ID); err != nil {
 		if !skipUnavailable {
 			writeStoreError(w, err)
 		}

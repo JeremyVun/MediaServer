@@ -199,7 +199,7 @@ func TestWatchProgressUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create item: %v", err)
 	}
-	progress, err := s.UpsertProgress(ctx, item.ID, 50, 100)
+	progress, err := s.UpsertProgress(ctx, item.ID, 50, 100, false)
 	if err != nil {
 		t.Fatalf("insert progress: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestWatchProgressUpsert(t *testing.T) {
 		t.Fatalf("progress = %+v", got)
 	}
 
-	progress, err = s.UpsertProgress(ctx, item.ID, 95, 100)
+	progress, err = s.UpsertProgress(ctx, item.ID, 95, 100, false)
 	if err != nil {
 		t.Fatalf("update progress: %v", err)
 	}
@@ -279,13 +279,13 @@ func TestListItemsInProgressFilter(t *testing.T) {
 	finished, _ := s.CreateItem(ctx, store.NewItem{Title: "finished"})
 	startedLater, _ := s.CreateItem(ctx, store.NewItem{Title: "started later"})
 
-	if _, err := s.UpsertProgress(ctx, started.ID, 60, 600); err != nil {
+	if _, err := s.UpsertProgress(ctx, started.ID, 60, 600, false); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
-	if _, err := s.UpsertProgress(ctx, finished.ID, 590, 600); err != nil { // ≥95% ⇒ completed
+	if _, err := s.UpsertProgress(ctx, finished.ID, 590, 600, false); err != nil { // ≥95% ⇒ completed
 		t.Fatalf("progress: %v", err)
 	}
-	if _, err := s.UpsertProgress(ctx, startedLater.ID, 30, 600); err != nil {
+	if _, err := s.UpsertProgress(ctx, startedLater.ID, 30, 600, false); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
 
@@ -378,7 +378,7 @@ func TestFileLifecycle(t *testing.T) {
 	}
 
 	// Cascade: deleting the item removes its files.
-	if err := s.HardDeleteItem(ctx, item.ID); err != nil {
+	if _, err := s.HardDeleteItem(ctx, item.ID); err != nil {
 		t.Fatalf("hard delete: %v", err)
 	}
 	if _, err := s.GetFile(ctx, f.ID); !errors.Is(err, store.ErrNotFound) {
@@ -531,7 +531,7 @@ func TestFTSTriggersStayInSync(t *testing.T) {
 		t.Error("update trigger left stale FTS entry")
 	}
 
-	if err := s.HardDeleteItem(ctx, item.ID); err != nil {
+	if _, err := s.HardDeleteItem(ctx, item.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	var n int
@@ -665,7 +665,7 @@ func TestListItemSummariesCollectionFilter(t *testing.T) {
 	if len(summaries) != 1 || summaries[0].ItemCount != 2 || len(summaries[0].ThumbItemIDs) != 2 {
 		t.Fatalf("collection summaries = %+v", summaries)
 	}
-	if err := s.ReorderCollection(ctx, col.ID, []int64{second.ID, in.ID}); err != nil {
+	if err := s.ReorderCollection(ctx, col.ID, []store.CollectionRef{{ItemID: second.ID}, {ItemID: in.ID}}); err != nil {
 		t.Fatalf("reorder: %v", err)
 	}
 	items, _, err = s.ListItemSummaries(ctx, store.ListItemsOpts{CollectionID: col.ID})
@@ -675,7 +675,7 @@ func TestListItemSummariesCollectionFilter(t *testing.T) {
 	if items[0].ID != second.ID || items[1].ID != in.ID {
 		t.Fatalf("reordered items = %+v", items)
 	}
-	if err := s.ReorderCollection(ctx, col.ID, []int64{in.ID}); !errors.Is(err, store.ErrInvalidInput) {
+	if err := s.ReorderCollection(ctx, col.ID, []store.CollectionRef{{ItemID: in.ID}}); !errors.Is(err, store.ErrInvalidInput) {
 		t.Fatalf("bad reorder err = %v", err)
 	}
 	renamed, err := s.UpdateCollection(ctx, col.ID, "Watchlist")

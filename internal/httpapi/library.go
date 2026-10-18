@@ -219,7 +219,7 @@ func (s *Server) handlePutProgress(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "position_s and duration_s must be valid")
 		return
 	}
-	progress, err := s.store.UpsertProgress(r.Context(), id, req.PositionS, req.DurationS)
+	progress, err := s.store.UpsertProgress(r.Context(), id, req.PositionS, req.DurationS, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "saving progress failed")
 		s.log.Error("save progress", "item_id", id, "error", err)
