@@ -41,6 +41,9 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
     url: `http://127.0.0.1:${port}`,
+    // :8484 is the production server. Requests that escape page.route (the
+    // player's keepalive progress save on page close) must fail, not land there.
+    env: { API_TARGET: 'http://127.0.0.1:9' },
     reuseExistingServer: false,
     timeout: 30_000,
   },
