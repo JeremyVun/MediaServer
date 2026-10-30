@@ -975,7 +975,7 @@ function Player({ itemID, fileID }: { itemID: number; fileID: number | null }) {
             kind="subtitles"
             src={subtitle.url}
             srcLang={subtitle.lang ?? 'und'}
-            label={subtitleLabel(subtitle.stream_index, subtitle.lang)}
+            label={subtitleLabel(subtitleOptions.find((stream) => stream.stream_index === subtitle.stream_index) ?? subtitle)}
           />
         ))}
       </video>
@@ -1459,12 +1459,14 @@ function channelLayoutLabel(channels?: number): string | null {
 }
 
 function subtitleOptionLabel(stream: MediaStream): string {
-  const base = subtitleLabel(stream.stream_index, stream.lang ?? stream.title)
+  const base = subtitleLabel(stream)
   return isImageSubtitleCodec(stream.codec) ? `${base} (Burn in)` : base
 }
 
-function subtitleLabel(streamIndex: number, label?: string): string {
-  return label ? label.toUpperCase() : `Subtitle ${streamIndex}`
+// Title first: a file often carries several same-language tracks (forced,
+// full, SDH) that only the title tells apart.
+function subtitleLabel(stream: { stream_index: number; lang?: string; title?: string }): string {
+  return stream.title ?? stream.lang?.toUpperCase() ?? `Subtitle ${stream.stream_index}`
 }
 
 function isTextSubtitleCodec(codec: string): boolean {
