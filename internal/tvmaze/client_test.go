@@ -26,9 +26,21 @@ func fixture(t *testing.T, name string) []byte {
 
 func newTestClient(t *testing.T, h http.Handler) (*Client, *httptest.Server) {
 	t.Helper()
-	srv := httptest.NewServer(h)
+	srv := newServer(h)
 	t.Cleanup(srv.Close)
 	return New(Options{BaseURL: srv.URL, HTTPClient: srv.Client()}), srv
+}
+
+// newServer ignores requests for "/", which the client never makes: dev tools
+// that probe every new localhost port would otherwise count as calls.
+func newServer(h http.Handler) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
 }
 
 func serveFixtures(t *testing.T, routes map[string]string) http.Handler {
@@ -326,7 +338,7 @@ func TestRetryAfterParsing(t *testing.T) {
 func TestThrottle(t *testing.T) {
 	var mu sync.Mutex
 	var arrivals []time.Time
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		arrivals = append(arrivals, time.Now())
 		mu.Unlock()
